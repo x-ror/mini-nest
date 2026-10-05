@@ -1,3 +1,5 @@
+import { readFile, stat } from "node:fs/promises";
+import { extname, relative, resolve } from "node:path";
 import { AbstractHttpAdapter } from "@nestjs/core";
 import { LegacyRouteConverter } from "@nestjs/core/internal";
 import {
@@ -221,8 +223,71 @@ export abstract class NativeHttpAdapter<TServer> extends AbstractHttpAdapter<
       next();
     });
   }
-  useStaticAssets(): never {
-    throw new Error("Static assets require a separate integration.");
+  useStaticAssets(
+    root: string | { root?: string; prefix?: string; index?: string; maxAge?: number },
+    options: { prefix?: string; index?: string; maxAge?: number } = {},
+  ): this {
+    const resolvedRoot =
+      typeof root === "string" ? root : root.root ?? process.cwd();
+    const resolvedOptions = typeof root === "string" ? options : { ...root, ...options };
+    const prefix = resolvedOptions.prefix ?? "/";
+    const indexName = resolvedOptions.index ?? "index.html";
+    const rootPath = resolve(resolvedRoot);
+    const fileExtensionContentType = (filePath: string): string => {
+      const extension = extname(filePath).toLowerCase();
+      switch (extension) {
+        case ".html":
+          return "text/html; charset=utf-8";
+        case ".css":
+          return "text/css; charset=utf-8";
+        case ".js":
+          return "application/javascript; charset=utf-8";
+        case ".json":
+          return "application/json; charset=utf-8";
+        case ".svg":
+          return "image/svg+xml";
+        case ".txt":
+          return "text/plain; charset=utf-8";
+        case ".png":
+          return "image/png";
+        case ".jpg":
+        case ".jpeg":
+          return "image/jpeg";
+        case ".webp":
+          return "image/webp";
+        case ".gif":
+          return "image/gif";
+        case ".ico":
+          return "image/x-icon";
+        default:
+          return "application/octet-stream";
+      }
+    };
+    this.use(async (req, res, next) => {
+      if (req.method !== "GET" && req.method !== "HEAD") return next();
+      const normalizedPrefix = prefix === "/" ? "/" : prefix.replace(/\/+$/, "");
+      if (normalizedPrefix !== "/" && !req.path.startsWith(normalizedPrefix)) return next();
+      const rawPath = normalizedPrefix === "/" ? req.path : req.path.slice(normalizedPrefix.length) || "/";
+      const safePath = rawPath === "/" ? indexName : rawPath.replace(/^\/+/, "");
+      const targetPath = resolve(rootPath, safePath);
+      const relativeToRoot = relative(rootPath, targetPath);
+      if (relativeToRoot.startsWith("..") || relativeToRoot === "..") return next();
+      try {
+        const stats = await stat(targetPath);
+        const filePath = stats.isDirectory() ? resolve(targetPath, indexName) : targetPath;
+        const fileStats = await stat(filePath);
+        if (!fileStats.isFile()) return next();
+        const bytes = await readFile(filePath);
+        if (typeof resolvedOptions.maxAge === "number")
+          res.setHeader("cache-control", `public, max-age=${resolvedOptions.maxAge}`);
+        res.setHeader("content-type", fileExtensionContentType(filePath));
+        if (req.method === "HEAD") return res.status(200).end();
+        res.status(200).send(bytes);
+      } catch {
+        return next();
+      }
+    });
+    return this;
   }
   useBodyParser(): never {
     throw new Error("Custom body parsers are not implemented; configure bodyLimit on the adapter.");

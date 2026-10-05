@@ -51,11 +51,12 @@ These are **not drop-in Express plugin adapters**. `@Req()` exposes a
 `@Res()` exposes `NativeResponse` with `status`, `json`, `send`, `end`,
 `setHeader`, `getHeader`, and `redirect`, not a Node `ServerResponse`.
 No Express-specific middleware APIs, nested form parsing, multipart uploads,
-SSE/direct response writes, WebSocket upgrades, MVC, static assets, configurable
-body parsers, HTTPS, or non-URI versioning are provided yet. CORS is supported
-through the adapter middleware API with basic origin/preflight handling.
-Unsupported adapter configuration throws instead of silently doing nothing. Use
-a reverse proxy for TLS; do not assume browser cross-origin access is enabled.
+SSE/direct response writes, WebSocket upgrades, MVC, configurable body parsers,
+HTTPS, or non-URI versioning are provided yet. Basic static file serving and
+CORS are supported through the adapter middleware API with origin/preflight
+handling. Unsupported adapter configuration throws instead of silently doing
+nothing. Use a reverse proxy for TLS; do not assume browser cross-origin access
+is enabled.
 
 The Node adapter exposes its real HTTP server through `getHttpServer()`.
 The Bun adapter exposes a small event/address facade for Nest's listen lifecycle,

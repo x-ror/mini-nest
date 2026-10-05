@@ -11,9 +11,9 @@ history, not active workspace packages.
   wrapped only for Nest's event/address listen contract.
 - Requests and responses use the supported fields/APIs documented in README.
   SSE, WebSocket upgrades, Node response events, Express plugins, multipart,
-  nested forms, custom parsers, MVC/static files, HTTPS, and non-URI versioning
-  remain outside the initial implementation. Basic CORS headers and preflight
-  handling are supported through the adapter middleware API.
+  nested forms, custom parsers, MVC, HTTPS, and non-URI versioning remain
+  outside the initial implementation. Basic static file serving, CORS headers,
+  and preflight handling are supported through the adapter middleware API.
 - `path-to-regexp` is a deliberate routing dependency; maintaining a custom
   path grammar would add unnecessary compatibility risk.
 - Middleware path normalization uses Nest's internal `LegacyRouteConverter`,

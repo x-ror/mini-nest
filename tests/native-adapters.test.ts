@@ -1,4 +1,6 @@
 import "reflect-metadata";
+import { mkdir, rm, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 import { NestFactory } from "@nestjs/core";
 import { VersioningType, type INestApplication } from "@nestjs/common";
@@ -84,10 +86,9 @@ describe("native Nest adapters", () => {
       code: "EADDRINUSE",
     });
   });
-  it("supports CORS preflight and headers and rejects other unsupported capabilities explicitly", async () => {
+  it("supports CORS preflight and static file serving and rejects other unsupported capabilities explicitly", async () => {
     const adapter = new NodeHttpAdapter();
     adapter.enableCors({ origin: "*", credentials: true, methods: ["GET", "POST"], allowedHeaders: ["content-type", "x-auth"] });
-    expect(() => adapter.useStaticAssets()).toThrow("Static");
     expect(() => adapter.useBodyParser()).toThrow("Custom body parsers");
     expect(() => adapter.render()).toThrow("MVC");
     expect(() =>
@@ -100,23 +101,39 @@ describe("native Nest adapters", () => {
 
     const app = await NestFactory.create(FixtureModule, adapter, { logger: false });
     apps.push(app);
-    await app.listen(0, "127.0.0.1");
-    const preflight = await fetch(`${await app.getUrl()}/api`, {
-      method: "OPTIONS",
-      headers: {
-        origin: "https://example.com",
-        "access-control-request-method": "POST",
-        "access-control-request-headers": "content-type, x-auth",
-      },
-    });
-    expect(preflight.status).toBe(204);
-    expect(preflight.headers.get("access-control-allow-origin")).toBe("*");
-    expect(preflight.headers.get("access-control-allow-methods")).toContain("POST");
-    const response = await fetch(`${await app.getUrl()}/api`, {
-      headers: { origin: "https://example.com" },
-    });
-    expect(response.headers.get("access-control-allow-origin")).toBe("*");
-    expect(response.headers.get("access-control-allow-credentials")).toBe("true");
+    const staticDir = join(process.cwd(), "tmp-static");
+    try {
+      await mkdir(staticDir, { recursive: true });
+      await writeFile(join(staticDir, "index.html"), "<h1>hello</h1>");
+      await writeFile(join(staticDir, "app.js"), "console.log('static');");
+      app.useStaticAssets(staticDir, { prefix: "/assets" });
+      await app.listen(0, "127.0.0.1");
+      const base = await app.getUrl();
+      const preflight = await fetch(`${base}/api`, {
+        method: "OPTIONS",
+        headers: {
+          origin: "https://example.com",
+          "access-control-request-method": "POST",
+          "access-control-request-headers": "content-type, x-auth",
+        },
+      });
+      expect(preflight.status).toBe(204);
+      expect(preflight.headers.get("access-control-allow-origin")).toBe("*");
+      expect(preflight.headers.get("access-control-allow-methods")).toContain("POST");
+      const response = await fetch(`${base}/api`, {
+        headers: { origin: "https://example.com" },
+      });
+      expect(response.headers.get("access-control-allow-origin")).toBe("*");
+      expect(response.headers.get("access-control-allow-credentials")).toBe("true");
+      const assetsIndex = await fetch(`${base}/assets/`);
+      expect(assetsIndex.status).toBe(200);
+      expect(await assetsIndex.text()).toContain("hello");
+      const assetsJs = await fetch(`${base}/assets/app.js`);
+      expect(assetsJs.status).toBe(200);
+      expect(await assetsJs.text()).toContain("console.log");
+    } finally {
+      await rm(staticDir, { recursive: true, force: true });
+    }
   });
   it("preserves multiple cookies and omits bodies for HEAD and 204", async () => {
     const adapter = new NodeHttpAdapter();
