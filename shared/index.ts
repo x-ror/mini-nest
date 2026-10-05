@@ -96,24 +96,25 @@ export abstract class NativeHttpAdapter<TServer> extends AbstractHttpAdapter<
     const response = new NativeResponse(request.method);
     if (this.shuttingDown && this.return503OnClosing)
       return new Response("Service Unavailable", { status: 503 });
-    try {
-      await this.router.run(request, response, this.notFound);
-    } catch (error) {
-      if (response.headersSent) {
-        console.error("Request failed after response was sent", error);
-      } else if (this.errorHandler) {
-        await this.errorHandler(error, request, response, () => {});
-      } else {
-        console.error("Unhandled native adapter error", error);
-        response
-          .status(error instanceof HttpException ? error.getStatus() : 500)
-          .json(
-            error instanceof HttpException
-              ? error.getResponse()
-              : { statusCode: 500, message: "Internal server error" },
-          );
-      }
-    }
+    const routing = this.router
+      .run(request, response, this.notFound)
+      .catch(async (error: unknown) => {
+        if (response.headersSent) {
+          console.error("Request failed after response was sent", error);
+        } else if (this.errorHandler) {
+          await this.errorHandler(error, request, response, () => {});
+        } else {
+          console.error("Unhandled native adapter error", error);
+          response
+            .status(error instanceof HttpException ? error.getStatus() : 500)
+            .json(
+              error instanceof HttpException
+                ? error.getResponse()
+                : { statusCode: 500, message: "Internal server error" },
+            );
+        }
+      });
+    await Promise.race([routing, response.done]);
     return response.done;
   };
   getRequestHostname(request: NativeRequest): string {

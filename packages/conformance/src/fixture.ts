@@ -17,6 +17,7 @@ import {
   Redirect,
   Req,
   Res,
+  Sse,
   StreamableFile,
   UseGuards,
   UseInterceptors,
@@ -31,7 +32,7 @@ import {
   type OnModuleInit,
   type OnModuleDestroy,
 } from "@nestjs/common";
-import { map } from "rxjs";
+import { interval, map, take } from "rxjs";
 import type { NativeRequest, NativeResponse } from "nestjs-adapter-node";
 
 @Injectable()
@@ -125,6 +126,13 @@ class TestController {
   }
   @Get("file") file() {
     return new StreamableFile(Buffer.from("native stream"));
+  }
+  @Sse("events")
+  events() {
+    return interval(5).pipe(
+      take(2),
+      map((index) => ({ data: { index } })),
+    );
   }
 }
 

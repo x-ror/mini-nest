@@ -36,6 +36,7 @@ const cases: [string, RequestInit?][] = [
   ["/api/manual"],
   ["/api/cookies"],
   ["/api/file"],
+  ["/api/events"],
   ["/api/redirect", { redirect: "manual" }],
   ["/missing"],
   ["/api", { method: "HEAD" }],

@@ -89,6 +89,24 @@ describe("native Nest adapters", () => {
     expect(tooLarge.status).toBe(413);
     await tooLarge.arrayBuffer();
   });
+  it("streams Nest @Sse() Observable events as an event-stream response", async () => {
+    const adapter = new NodeHttpAdapter();
+    adapter.enableCors({ origin: "https://example.com" });
+    const app = await NestFactory.create(FixtureModule, adapter, { logger: false });
+    apps.push(app);
+    await app.listen(0, "127.0.0.1");
+    const response = await fetch(`${await app.getUrl()}/api/events`, {
+      headers: { origin: "https://example.com" },
+    });
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toBe("text/event-stream");
+    expect(response.headers.get("cache-control")).toContain("no-cache");
+    expect(response.headers.get("access-control-allow-origin")).toBe("https://example.com");
+    expect(response.body).not.toBeNull();
+    const body = await response.text();
+    expect(body).toContain('data: {"index":0}');
+    expect(body).toContain('data: {"index":1}');
+  });
   it("responds with 503 while shutting down when configured and remains idempotent on close", async () => {
     const adapter = new NodeHttpAdapter();
     const app = await NestFactory.create(FixtureModule, adapter, {

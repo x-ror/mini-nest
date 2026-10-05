@@ -10,9 +10,10 @@ history, not active workspace packages.
 - Bun uses `Bun.serve`, not `node:http` running under Bun. Its native server is
   wrapped only for Nest's event/address listen contract.
 - Requests and responses use the supported fields/APIs documented in README.
-  SSE, WebSocket upgrades, Node response events, Express plugins, Multer
-  decorators, custom parsers, MVC, native HTTPS, and non-URI versioning remain
-  outside the initial implementation. TLS should terminate at a reverse proxy;
+  WebSocket upgrades, Node response events, Express plugins, Multer decorators,
+  arbitrary direct response writes, custom parsers, MVC, native HTTPS, and
+  non-URI versioning remain outside the initial implementation. Nest `@Sse()`
+  Observable routes are supported. TLS should terminate at a reverse proxy;
   forwarded headers are not interpreted by the adapter. Multipart files are
   native `File` values in `@Body()`. Basic static file serving, CORS headers,
   and preflight handling are supported through the adapter middleware API.
@@ -37,7 +38,7 @@ history, not active workspace packages.
 - [x] multipart/form-data and nested form parsing
 - [x] static asset handling and `CORS`
 - [x] HTTPS/TLS deployment guidance via a reverse proxy, without pretending to be a native HTTPS adapter
-- [ ] SSE/streaming patterns that fit the native fetch response model
+- [x] Nest `@Sse()` Observable streaming
 
 ### Phase 3: production readiness
 

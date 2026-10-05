@@ -37,8 +37,17 @@ try {
   assert.equal(parsedForm.upload.name, "hello.txt");
   assert.equal(parsedForm.upload.size, 5);
   assert.match(parsedForm.upload.type, /^text\/plain/);
+  const sseResponse = await adapter.fetch(new Request("http://localhost/api/events"));
+  assert.equal(sseResponse.status, 200);
+  assert.equal(sseResponse.headers.get("content-type"), "text/event-stream");
+  const sseBody = await sseResponse.text();
+  assert.match(sseBody, /data: \{"index":0\}/);
+  assert.match(sseBody, /data: \{"index":1\}/);
   await app.listen(0, "127.0.0.1");
   assert.ok(adapter.getHttpServer().native);
+  const liveSseResponse = await fetch(`${await app.getUrl()}/api/events`);
+  assert.equal(liveSseResponse.headers.get("content-type"), "text/event-stream");
+  assert.match(await liveSseResponse.text(), /data: \{"index":1\}/);
   const second = await NestFactory.create(FixtureModule, new BunHttpAdapter(), { logger: false });
   try {
     await assert.rejects(second.listen(adapter.getHttpServer().address()!.port, "127.0.0.1"));

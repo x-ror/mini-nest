@@ -40,10 +40,10 @@ Supported: HTTP routing with `path-to-regexp` 8 syntax, named parameters and
 wildcards, query strings (repeated keys become arrays), global prefixes, URI
 versioning, Nest middleware, JSON, nested URL-encoded and multipart form bodies,
 raw bodies, status/headers/cookies/redirects, HEAD/no-content responses,
-`StreamableFile`, and Nest's standard request pipeline. Repeated form fields
-become arrays, bracket notation creates nested objects/arrays, and multipart
-file fields are exposed as native `File` values on `@Body()`. Route matching is
-case-sensitive.
+`StreamableFile`, Nest `@Sse()` routes returning Observables, and Nest's standard
+request pipeline. Repeated form fields become arrays, bracket notation creates
+nested objects/arrays, and multipart file fields are exposed as native `File`
+values on `@Body()`. Route matching is case-sensitive.
 
 The default parsed-body limit is 100 KiB; configure `new NodeHttpAdapter({
 bodyLimit: 1024 * 1024 })` or the same option on Bun. `shutdownTimeout` defaults
@@ -54,11 +54,31 @@ These are **not drop-in Express plugin adapters**. `@Req()` exposes a
 `@Res()` exposes `NativeResponse` with `status`, `json`, `send`, `end`,
 `setHeader`, `getHeader`, and `redirect`, not a Node `ServerResponse`.
 No Express-specific middleware APIs, Multer-compatible file decorators,
-SSE/direct response writes, WebSocket upgrades, MVC, configurable body parsers,
-HTTPS, or non-URI versioning are provided yet. Basic static file serving and
-CORS are supported through the adapter middleware API with origin/preflight
-handling. Unsupported adapter configuration throws instead of silently doing
-nothing. Do not assume browser cross-origin access is enabled.
+arbitrary direct response writes, WebSocket upgrades, MVC, configurable body
+parsers, HTTPS, or non-URI versioning are provided yet. `@Sse()` streams Nest
+`MessageEvent` values as `text/event-stream`; it is not a general-purpose
+streaming response API. Basic static file serving and CORS are supported through
+the adapter middleware API with origin/preflight handling. Unsupported adapter
+configuration throws instead of silently doing nothing. Do not assume browser
+cross-origin access is enabled.
+
+Example SSE endpoint:
+
+```ts
+import { Controller, Sse } from "@nestjs/common";
+import { interval, map, take } from "rxjs";
+
+@Controller()
+export class EventsController {
+  @Sse("events")
+  events() {
+    return interval(1000).pipe(
+      take(3),
+      map((count) => ({ data: { count } })),
+    );
+  }
+}
+```
 
 ### TLS behind a reverse proxy
 
@@ -107,7 +127,7 @@ The Node adapter exposes its real HTTP server through `getHttpServer()`.
 The Bun adapter exposes a small event/address facade for Nest's listen lifecycle,
 with the actual Bun server at `.native`; it is not a Node server or a WebSocket
 adapter. Fetch response streaming is supported for files, but arbitrary Node
-response events are not.
+response events and manual `write()` calls are not.
 
 ## Development
 

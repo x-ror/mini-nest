@@ -1,17 +1,51 @@
 import { Readable } from "node:stream";
+import { PassThrough } from "node:stream";
 import { STATUS_CODES } from "node:http";
 import { StreamableFile } from "@nestjs/common";
+
+class NativeSseResponse extends PassThrough {
+  statusCode = 200;
+
+  constructor(private readonly commit: (statusCode: number, headers?: OutgoingHeaders) => void) {
+    super();
+  }
+
+  writeHead(statusCode: number, headers?: OutgoingHeaders): this {
+    this.statusCode = statusCode;
+    this.commit(statusCode, headers);
+    return this;
+  }
+
+  flushHeaders(): void {
+    this.commit(this.statusCode);
+  }
+}
+
+type OutgoingHeaders = Record<string, number | string | readonly string[]>;
 
 export class NativeResponse {
   statusCode = 200;
   readonly headers = new Headers();
   headersSent = false;
   readonly done: Promise<Response>;
+  readonly raw: NativeSseResponse;
   private complete!: (response: Response) => void;
 
   constructor(private readonly method: string) {
     this.done = new Promise((resolve) => {
       this.complete = resolve;
+    });
+    this.raw = new NativeSseResponse((statusCode, headers) => {
+      if (this.headersSent) return;
+      this.status(statusCode);
+      if (headers) {
+        for (const [name, value] of Object.entries(headers)) this.setHeader(name, value);
+      }
+      const body =
+        this.method === "HEAD" || [204, 205, 304].includes(statusCode)
+          ? null
+          : (Readable.toWeb(this.raw) as unknown as BodyInit);
+      this.finish(body);
     });
   }
 
@@ -32,6 +66,15 @@ export class NativeResponse {
     return name.toLowerCase() === "set-cookie"
       ? this.headers.getSetCookie()
       : (this.headers.get(name) ?? undefined);
+  }
+  getHeaders(): Record<string, string | string[]> {
+    const result: Record<string, string | string[]> = {};
+    this.headers.forEach((value, name) => {
+      result[name] = value;
+    });
+    const cookies = this.headers.getSetCookie();
+    if (cookies.length) result["set-cookie"] = cookies;
+    return result;
   }
   appendHeader(name: string, value: string): this {
     this.headers.append(name, value);
@@ -84,7 +127,7 @@ export class NativeResponse {
     return this.finish(message ?? null);
   }
   write(): never {
-    throw new Error("Direct streaming and SSE are not supported; use StreamableFile.");
+    throw new Error("Direct response writes are not supported; use Nest's @Sse() decorator.");
   }
   on(): never {
     throw new Error("Node response events are not supported by the fetch response facade.");
