@@ -58,8 +58,50 @@ SSE/direct response writes, WebSocket upgrades, MVC, configurable body parsers,
 HTTPS, or non-URI versioning are provided yet. Basic static file serving and
 CORS are supported through the adapter middleware API with origin/preflight
 handling. Unsupported adapter configuration throws instead of silently doing
-nothing. Use a reverse proxy for TLS; do not assume browser cross-origin access
-is enabled.
+nothing. Do not assume browser cross-origin access is enabled.
+
+### TLS behind a reverse proxy
+
+The adapters serve plain HTTP. Terminate TLS at a reverse proxy such as Nginx,
+and keep the application listener reachable only from that proxy (for example,
+bind to `127.0.0.1` or a private container network). Configure the proxy's
+request-body limit to match the adapter's `bodyLimit`; the default parsed-body
+limit is 100 KiB.
+
+Example Nginx configuration for an app listening on `127.0.0.1:3000`:
+
+```nginx
+server {
+    listen 80;
+    server_name example.com;
+    return 301 https://example.com$request_uri;
+}
+
+server {
+    listen 443 ssl;
+    server_name example.com;
+
+    ssl_certificate     /etc/letsencrypt/live/example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/example.com/privkey.pem;
+    client_max_body_size 1m;
+
+    location / {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+```
+
+If using the `1m` proxy limit, configure the adapter with
+`{ bodyLimit: 1024 * 1024 }`. The adapters currently do not interpret
+`X-Forwarded-*` headers: `@Req().protocol` and `@Req().ip` reflect the
+application-side HTTP connection, not the original client connection. Do not
+use forwarded headers for security decisions unless a trusted-proxy policy is
+implemented by your application. These adapters do not support WebSocket
+upgrades or SSE/direct response writes, even when the proxy can proxy them.
 
 The Node adapter exposes its real HTTP server through `getHttpServer()`.
 The Bun adapter exposes a small event/address facade for Nest's listen lifecycle,

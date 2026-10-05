@@ -11,10 +11,11 @@ history, not active workspace packages.
   wrapped only for Nest's event/address listen contract.
 - Requests and responses use the supported fields/APIs documented in README.
   SSE, WebSocket upgrades, Node response events, Express plugins, Multer
-  decorators, custom parsers, MVC, HTTPS, and non-URI versioning remain outside
-  the initial implementation. Multipart files are native `File` values in
-  `@Body()`. Basic static file serving, CORS headers, and preflight handling
-  are supported through the adapter middleware API.
+  decorators, custom parsers, MVC, native HTTPS, and non-URI versioning remain
+  outside the initial implementation. TLS should terminate at a reverse proxy;
+  forwarded headers are not interpreted by the adapter. Multipart files are
+  native `File` values in `@Body()`. Basic static file serving, CORS headers,
+  and preflight handling are supported through the adapter middleware API.
 - `path-to-regexp` is a deliberate routing dependency; maintaining a custom
   path grammar would add unnecessary compatibility risk.
 - Middleware path normalization uses Nest's internal `LegacyRouteConverter`,
@@ -35,7 +36,7 @@ history, not active workspace packages.
 
 - [x] multipart/form-data and nested form parsing
 - [x] static asset handling and `CORS`
-- [ ] HTTPS/TLS deployment guidance via a reverse proxy, without pretending to be a native HTTPS adapter
+- [x] HTTPS/TLS deployment guidance via a reverse proxy, without pretending to be a native HTTPS adapter
 - [ ] SSE/streaming patterns that fit the native fetch response model
 
 ### Phase 3: production readiness
