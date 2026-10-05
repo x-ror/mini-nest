@@ -1,16 +1,10 @@
 {
-  "name": "@mini-nest/conformance",
+  "name": "@nest-native/conformance",
   "version": "0.1.0",
   "private": true,
   "type": "module",
   "devDependencies": {
-    "@mini-nest/common": "0.1.0",
-    "@mini-nest/core": "0.1.0",
-    "@mini-nest/platform-node": "0.1.0",
-    "@nestjs/common": "12.1.2",
-    "@nestjs/core": "12.1.2",
-    "@nestjs/platform-express": "12.1.2",
-    "reflect-metadata": "^0.2.2",
-    "rxjs": "^7.8.2"
+    "@nest-native/platform-node": "0.1.0",
+    "@nest-native/platform-bun": "0.1.0"
   }
 }

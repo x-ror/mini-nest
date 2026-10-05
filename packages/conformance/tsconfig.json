@@ -2,5 +2,5 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": { "rootDir": "src", "outDir": "dist", "types": ["node"] },
   "include": ["src/**/*.ts"],
-  "references": [{ "path": "../common" }, { "path": "../core" }, { "path": "../platform-node" }]
+  "references": [{ "path": "../platform-node" }, { "path": "../platform-bun" }]
 }

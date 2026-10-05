@@ -1,0 +1,9 @@
+{
+  "name": "@nest-native/adapter-common",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": { ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" } },
+  "dependencies": { "path-to-regexp": "^8.3.0" },
+  "peerDependencies": { "@nestjs/common": "^12.1.2", "@nestjs/core": "^12.1.2" }
+}
