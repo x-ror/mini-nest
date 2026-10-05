@@ -84,9 +84,9 @@ describe("native Nest adapters", () => {
       code: "EADDRINUSE",
     });
   });
-  it("rejects unsupported capabilities explicitly", async () => {
+  it("supports CORS preflight and headers and rejects other unsupported capabilities explicitly", async () => {
     const adapter = new NodeHttpAdapter();
-    expect(() => adapter.enableCors()).toThrow("CORS");
+    adapter.enableCors({ origin: "*", credentials: true, methods: ["GET", "POST"], allowedHeaders: ["content-type", "x-auth"] });
     expect(() => adapter.useStaticAssets()).toThrow("Static");
     expect(() => adapter.useBodyParser()).toThrow("Custom body parsers");
     expect(() => adapter.render()).toThrow("MVC");
@@ -97,6 +97,26 @@ describe("native Nest adapters", () => {
     expect(() => new BunHttpAdapter().initHttpServer({})).toThrow("Bun runtime");
     expect(() => new NodeHttpAdapter({ bodyLimit: -1 })).toThrow("bodyLimit");
     expect(() => new NodeHttpAdapter({ shutdownTimeout: -1 })).toThrow("shutdownTimeout");
+
+    const app = await NestFactory.create(FixtureModule, adapter, { logger: false });
+    apps.push(app);
+    await app.listen(0, "127.0.0.1");
+    const preflight = await fetch(`${await app.getUrl()}/api`, {
+      method: "OPTIONS",
+      headers: {
+        origin: "https://example.com",
+        "access-control-request-method": "POST",
+        "access-control-request-headers": "content-type, x-auth",
+      },
+    });
+    expect(preflight.status).toBe(204);
+    expect(preflight.headers.get("access-control-allow-origin")).toBe("*");
+    expect(preflight.headers.get("access-control-allow-methods")).toContain("POST");
+    const response = await fetch(`${await app.getUrl()}/api`, {
+      headers: { origin: "https://example.com" },
+    });
+    expect(response.headers.get("access-control-allow-origin")).toBe("*");
+    expect(response.headers.get("access-control-allow-credentials")).toBe("true");
   });
   it("preserves multiple cookies and omits bodies for HEAD and 204", async () => {
     const adapter = new NodeHttpAdapter();

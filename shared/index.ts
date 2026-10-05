@@ -173,8 +173,53 @@ export abstract class NativeHttpAdapter<TServer> extends AbstractHttpAdapter<
     const converted = LegacyRouteConverter.tryConvert(path);
     return converted.length > 1 ? converted.replace(/\/$/, "") : converted;
   }
-  enableCors(): never {
-    throw new Error("CORS configuration is not implemented by native adapters yet.");
+  enableCors(options: Record<string, unknown> = {}): void {
+    const originOption = options.origin ?? "*";
+    const methods = Array.isArray(options.methods)
+      ? options.methods.map((value) => String(value))
+      : ["GET", "HEAD", "PUT", "PATCH", "POST", "DELETE", "OPTIONS"];
+    const allowedHeaders = Array.isArray(options.allowedHeaders)
+      ? options.allowedHeaders.map((value) => String(value))
+      : ["Content-Type", "Authorization", "X-Requested-With", "X-Auth"];
+    const exposedHeaders = Array.isArray(options.exposedHeaders)
+      ? options.exposedHeaders.map((value) => String(value))
+      : [];
+    const credentials = options.credentials === true || options.allowCredentials === true;
+    const maxAge = options.maxAge;
+
+    const resolveOrigin = (requestOrigin?: string): string => {
+      if (requestOrigin === undefined) return originOption === true ? "*" : "*";
+      if (originOption === true || originOption === "*") return "*";
+      if (typeof originOption === "string") return originOption;
+      if (Array.isArray(originOption)) return originOption.includes(requestOrigin) ? requestOrigin : "*";
+      if (typeof originOption === "function") return String(originOption(requestOrigin));
+      return requestOrigin;
+    };
+
+    this.use((req, res, next) => {
+      const requestOrigin = typeof req.headers.origin === "string" ? req.headers.origin : undefined;
+      const allowOrigin = resolveOrigin(requestOrigin);
+      if (requestOrigin) res.setHeader("vary", "Origin");
+      if (allowOrigin) res.setHeader("access-control-allow-origin", allowOrigin);
+      if (credentials) res.setHeader("access-control-allow-credentials", "true");
+      if (exposedHeaders.length) {
+        res.setHeader("access-control-expose-headers", exposedHeaders.join(", "));
+      }
+      const isPreflight =
+        req.method === "OPTIONS" && typeof req.headers["access-control-request-method"] === "string";
+      if (isPreflight) {
+        const requestedHeaders =
+          typeof req.headers["access-control-request-headers"] === "string"
+            ? req.headers["access-control-request-headers"]
+            : allowedHeaders.join(", ");
+        res.setHeader("access-control-allow-methods", methods.join(", "));
+        res.setHeader("access-control-allow-headers", requestedHeaders);
+        if (typeof maxAge === "number") res.setHeader("access-control-max-age", String(maxAge));
+        res.status(204).end();
+        return;
+      }
+      next();
+    });
   }
   useStaticAssets(): never {
     throw new Error("Static assets require a separate integration.");
