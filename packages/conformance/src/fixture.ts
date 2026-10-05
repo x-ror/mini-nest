@@ -32,7 +32,7 @@ import {
   type OnModuleDestroy,
 } from "@nestjs/common";
 import { map } from "rxjs";
-import type { NativeRequest, NativeResponse } from "@nest-native/adapter-common";
+import type { NativeRequest, NativeResponse } from "nestjs-adapter-node";
 
 @Injectable()
 export class GreetingService implements OnModuleInit, OnModuleDestroy {

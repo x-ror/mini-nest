@@ -3,9 +3,8 @@ import { afterEach, describe, expect, it } from "vite-plus/test";
 import { NestFactory } from "@nestjs/core";
 import { VersioningType, type INestApplication } from "@nestjs/common";
 import { ExpressAdapter } from "@nestjs/platform-express";
-import { NodeHttpAdapter } from "@nest-native/platform-node";
-import { BunHttpAdapter } from "@nest-native/platform-bun";
-import { NativeResponse } from "@nest-native/adapter-common";
+import { NodeHttpAdapter, NativeResponse } from "nestjs-adapter-node";
+import { BunHttpAdapter } from "nestjs-adapter-bun";
 import { compareAdapters, startFixture } from "../packages/conformance/src/compare.js";
 import { FixtureModule, GreetingService } from "../packages/conformance/src/fixture.js";
 

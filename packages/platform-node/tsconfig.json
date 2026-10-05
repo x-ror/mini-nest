@@ -1,6 +1,9 @@
 {
   "extends": "../../tsconfig.base.json",
-  "compilerOptions": { "rootDir": "src", "outDir": "dist", "types": ["node"] },
-  "include": ["src/**/*.ts"],
-  "references": [{ "path": "../adapter-common" }]
+  "compilerOptions": {
+    "rootDir": "../..",
+    "outDir": "dist",
+    "types": ["node"]
+  },
+  "include": ["src/**/*.ts", "../../shared/**/*.ts"]
 }

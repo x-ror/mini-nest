@@ -1,10 +1,17 @@
 {
   "files": [],
   "references": [
-    { "path": "./packages/adapter-common" },
-    { "path": "./packages/platform-bun" },
-    { "path": "./packages/platform-node" },
-    { "path": "./packages/conformance" },
-    { "path": "./tsconfig.app.json" }
+    {
+      "path": "./packages/platform-bun"
+    },
+    {
+      "path": "./packages/platform-node"
+    },
+    {
+      "path": "./packages/conformance"
+    },
+    {
+      "path": "./tsconfig.app.json"
+    }
   ]
 }

@@ -13,6 +13,9 @@
     "emitDecoratorMetadata": false,
     "noUncheckedIndexedAccess": true,
     "forceConsistentCasingInFileNames": true,
-    "skipLibCheck": true
+    "skipLibCheck": true,
+    "paths": {
+      "@shared": ["./shared/index.ts"]
+    }
   }
 }

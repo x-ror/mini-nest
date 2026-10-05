@@ -1,13 +1,11 @@
 import { EventEmitter } from "node:events";
 import type { AddressInfo } from "node:net";
 import type { NestApplicationOptions } from "@nestjs/common";
-import { NativeHttpAdapter } from "@nest-native/adapter-common";
+import { NativeHttpAdapter } from "@shared";
 
-export type {
-  NativeAdapterOptions,
-  NativeRequest,
-  NativeResponse,
-} from "@nest-native/adapter-common";
+export { NativeResponse } from "@shared";
+
+export type { NativeAdapterOptions, NativeRequest } from "@shared";
 
 export class BunServerFacade extends EventEmitter {
   native?: Bun.Server<undefined>;

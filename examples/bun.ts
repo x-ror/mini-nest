@@ -1,5 +1,5 @@
 import { NestFactory } from "@nestjs/core";
-import { BunHttpAdapter } from "@nest-native/platform-bun";
+import { BunHttpAdapter } from "nestjs-adapter-bun";
 import { AppModule } from "./app.js";
 
 const app = await NestFactory.create(AppModule, new BunHttpAdapter());

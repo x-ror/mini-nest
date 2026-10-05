@@ -6,13 +6,14 @@ decorators, guards, pipes, interceptors, exception filters, and application life
 
 ## Packages
 
-| Package                       | Role                                            |
-| ----------------------------- | ----------------------------------------------- |
-| `@nest-native/platform-node`  | `NodeHttpAdapter`, backed by `node:http`        |
-| `@nest-native/platform-bun`   | `BunHttpAdapter`, backed by `Bun.serve`         |
-| `@nest-native/adapter-common` | Shared router, request parsing, response facade |
+| Package               | Role                                     |
+| --------------------- | ---------------------------------------- |
+| `nestjs-adapter-node` | `NodeHttpAdapter`, backed by `node:http` |
+| `nestjs-adapter-bun`  | `BunHttpAdapter`, backed by `Bun.serve`  |
 
-Packages are workspace-only for now, not published to npm. Supported baseline:
+The two adapters include shared router, request parsing, and response code in their builds.
+`shared/` is internal source, not a separate npm package.
+Run `pnpm run build` before packing or publishing either adapter; only `dist/` is shipped. Packages are not published to npm yet. Supported baseline:
 NestJS **12.1.2**, Node.js 22+, current Bun. Other Nest versions are not yet verified.
 Neither adapter uses Express or Fastify. Express is a test-only reference.
 
@@ -21,7 +22,7 @@ Neither adapter uses Express or Fastify. Express is a test-only reference.
 ```ts
 import "reflect-metadata";
 import { NestFactory } from "@nestjs/core";
-import { NodeHttpAdapter } from "@nest-native/platform-node";
+import { NodeHttpAdapter } from "nestjs-adapter-node";
 import { AppModule } from "./app.js";
 
 const app = await NestFactory.create(AppModule, new NodeHttpAdapter());
@@ -29,7 +30,7 @@ await app.listen(3000);
 ```
 
 For Bun, replace `NodeHttpAdapter` with `BunHttpAdapter` from
-`@nest-native/platform-bun` and run the application using Bun.
+`nestjs-adapter-bun` and run the application using Bun.
 Actual Nest requires `reflect-metadata`; the previous no-reflection framework
 experiment has been retired. Explicit `@Inject()` remains usable.
 
@@ -64,15 +65,17 @@ response events are not.
 ## Development
 
 ```sh
-npm install
-npx vp run check
-npx vp run test
-npx vp run test:bun
-npx vp run dev
+pnpm install
+pnpm run check
+pnpm run test
+pnpm run test:bun
+pnpm run dev
 ```
 
 `dev` watches the Node example; `vp run build` builds both example entrypoints.
 Run `bun dist/bun.js` for the Bun example. Both expose `/hello/world` on port 3000.
+Dependency versions live in `pnpm-workspace.yaml` catalogs. The pnpm version is pinned
+in `package.json`.
 Vite+ handles builds, watch, formatting, Oxlint, type checks, and Vitest.
 TypeScript 7 is retained. No ESLint, Babel, or tsc-watch.
 

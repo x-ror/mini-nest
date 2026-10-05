@@ -2,13 +2,11 @@ import { createServer, type Server } from "node:http";
 import { PassThrough, Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { NestApplicationOptions } from "@nestjs/common";
-import { NativeHttpAdapter } from "@nest-native/adapter-common";
+import { NativeHttpAdapter } from "@shared";
 
-export type {
-  NativeAdapterOptions,
-  NativeRequest,
-  NativeResponse,
-} from "@nest-native/adapter-common";
+export { NativeResponse } from "@shared";
+
+export type { NativeAdapterOptions, NativeRequest } from "@shared";
 
 async function* responseChunks(body: ReadableStream<Uint8Array>) {
   const reader = body.getReader();

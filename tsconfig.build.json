@@ -1,0 +1,9 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "types": ["node", "bun"],
+    "composite": false
+  },
+  "include": ["shared/**/*.ts", "packages/platform-*/src/**/*.ts"]
+}

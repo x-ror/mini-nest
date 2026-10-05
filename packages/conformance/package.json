@@ -4,7 +4,12 @@
   "private": true,
   "type": "module",
   "devDependencies": {
-    "@nest-native/platform-bun": "0.1.0",
-    "@nest-native/platform-node": "0.1.0"
+    "@nestjs/common": "catalog:",
+    "@nestjs/core": "catalog:",
+    "@nestjs/platform-express": "catalog:",
+    "nestjs-adapter-bun": "workspace:*",
+    "nestjs-adapter-node": "workspace:*",
+    "reflect-metadata": "catalog:",
+    "rxjs": "catalog:"
   }
 }

@@ -1,5 +1,5 @@
 import { NestFactory } from "@nestjs/core";
-import { NodeHttpAdapter } from "@nest-native/platform-node";
+import { NodeHttpAdapter } from "nestjs-adapter-node";
 import { AppModule } from "./app.js";
 
 const app = await NestFactory.create(AppModule, new NodeHttpAdapter());

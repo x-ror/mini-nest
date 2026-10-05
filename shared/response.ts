@@ -50,7 +50,9 @@ export class NativeResponse {
       if (metadata.disposition) this.setHeader("content-disposition", metadata.disposition);
       if (metadata.length !== undefined)
         this.headers.set("content-length", String(metadata.length));
-      return this.finish(Readable.toWeb(value.getStream()) as ReadableStream<Uint8Array>);
+      return this.finish(
+        Readable.toWeb(value.getStream()) as unknown as ReadableStream<Uint8Array>,
+      );
     }
     if (value instanceof Uint8Array) {
       if (!this.headers.has("content-type"))

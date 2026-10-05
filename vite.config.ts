@@ -1,12 +1,17 @@
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vite-plus";
 
-const aliases = Object.fromEntries(
-  ["adapter-common", "platform-node", "platform-bun"].map((name) => [
-    `@nest-native/${name}`,
+const packageAliases = Object.fromEntries(
+  ["platform-node", "platform-bun"].map((name) => [
+    `nestjs-adapter-${name.replace("platform-", "")}`,
     fileURLToPath(new URL(`./packages/${name}/src/index.ts`, import.meta.url)),
   ]),
 );
+
+const sharedAliases = {
+  "@shared": fileURLToPath(new URL("./shared/index.ts", import.meta.url)),
+};
+const aliases = { ...packageAliases, ...sharedAliases };
 
 export default defineConfig({
   resolve: { alias: aliases },
@@ -17,16 +22,17 @@ export default defineConfig({
   },
   fmt: { semi: true, singleQuote: false, ignorePatterns: ["**/dist/**", "**/node_modules/**"] },
   pack: [
-    ...["adapter-common", "platform-node", "platform-bun"].map((name) => ({
+    ...["platform-node", "platform-bun"].map((name) => ({
       name,
       entry: { index: `packages/${name}/src/index.ts` },
       outDir: `packages/${name}/dist`,
-      tsconfig: `packages/${name}/tsconfig.json`,
+      tsconfig: "tsconfig.build.json",
       platform: "node" as const,
       fixedExtension: false,
+      alias: sharedAliases,
       dts: true,
       sourcemap: true,
-      deps: { neverBundle: [/^@nest-native\//, /^@nestjs\//, "path-to-regexp"] },
+      deps: { neverBundle: [/^nestjs-adapter-/, /^@nestjs\//, "path-to-regexp"] },
     })),
     {
       name: "example",
@@ -37,7 +43,7 @@ export default defineConfig({
       fixedExtension: false,
       alias: aliases,
       deps: {
-        alwaysBundle: [/^@nest-native\//],
+        alwaysBundle: [/^nestjs-adapter-/],
         neverBundle: [/^@nestjs\//, "rxjs", "reflect-metadata", "path-to-regexp"],
       },
       dts: false,
@@ -50,7 +56,7 @@ export default defineConfig({
       tsconfig: "packages/conformance/tsconfig.json",
       platform: "node",
       fixedExtension: false,
-      deps: { neverBundle: [/^@nest-native\//, /^@nestjs\//, "reflect-metadata", "rxjs"] },
+      deps: { neverBundle: [/^nestjs-adapter-/, /^@nestjs\//, "reflect-metadata", "rxjs"] },
       dts: false,
       sourcemap: true,
     },

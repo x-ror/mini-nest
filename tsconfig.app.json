@@ -9,11 +9,15 @@
     "examples/**/*.ts",
     "tests/**/*.ts",
     "packages/conformance/src/**/*.ts",
-    "vite.config.ts"
+    "vite.config.ts",
+    "shared/**/*.ts"
   ],
   "references": [
-    { "path": "./packages/adapter-common" },
-    { "path": "./packages/platform-bun" },
-    { "path": "./packages/platform-node" }
+    {
+      "path": "./packages/platform-bun"
+    },
+    {
+      "path": "./packages/platform-node"
+    }
   ]
 }

@@ -1,5 +1,5 @@
 import { ExpressAdapter } from "@nestjs/platform-express";
-import { BunHttpAdapter } from "@nest-native/platform-bun";
+import { BunHttpAdapter } from "nestjs-adapter-bun";
 import assert from "node:assert/strict";
 import { NestFactory } from "@nestjs/core";
 import { compareAdapters, startFixture } from "./compare.js";

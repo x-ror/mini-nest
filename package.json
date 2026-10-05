@@ -2,9 +2,6 @@
   "name": "nest-native-adapters",
   "version": "0.1.0",
   "private": true,
-  "workspaces": [
-    "packages/*"
-  ],
   "type": "module",
   "scripts": {
     "dev": "vp pack --filter example --watch --on-success \"node dist/server.js\"",
@@ -20,21 +17,21 @@
     "test:bun": "vp pack && bun packages/conformance/dist/bun.js"
   },
   "devDependencies": {
-    "@nestjs/common": "12.1.2",
-    "@nestjs/core": "12.1.2",
-    "@nestjs/platform-express": "12.1.2",
-    "@types/bun": "^1.3.0",
-    "@types/node": "^26.6.4",
-    "reflect-metadata": "^0.2.2",
-    "rxjs": "^7.8.2",
-    "typescript": "^7.0.2",
-    "vite-plus": "^1.0.0"
-  },
-  "overrides": {
-    "vite": "npm:@voidzero-dev/vite-plus-core@1.0.0",
-    "vitest": "5.0.1"
+    "@nestjs/common": "catalog:",
+    "@nestjs/core": "catalog:",
+    "@nestjs/platform-express": "catalog:",
+    "@types/bun": "catalog:",
+    "@types/node": "catalog:",
+    "nestjs-adapter-bun": "workspace:*",
+    "nestjs-adapter-node": "workspace:*",
+    "path-to-regexp": "catalog:",
+    "reflect-metadata": "catalog:",
+    "rxjs": "catalog:",
+    "typescript": "catalog:",
+    "vite-plus": "catalog:"
   },
   "engines": {
     "node": ">=22"
-  }
+  },
+  "packageManager": "pnpm@10.15.1"
 }

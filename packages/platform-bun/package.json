@@ -1,7 +1,9 @@
 {
-  "name": "@nest-native/platform-bun",
+  "name": "nestjs-adapter-bun",
   "version": "0.1.0",
-  "private": true,
+  "files": [
+    "dist"
+  ],
   "type": "module",
   "exports": {
     ".": {
@@ -10,10 +12,10 @@
     }
   },
   "dependencies": {
-    "@nest-native/adapter-common": "0.1.0"
+    "path-to-regexp": "catalog:"
   },
   "peerDependencies": {
-    "@nestjs/common": "^12.1.2",
-    "@nestjs/core": "^12.1.2"
+    "@nestjs/common": "catalog:nest-peers",
+    "@nestjs/core": "catalog:nest-peers"
   }
 }
