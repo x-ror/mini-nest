@@ -6,6 +6,27 @@ and no external framework runtime dependencies. **Phase 0 foundation** of
 drop-in NestJS replacement. The compatibility reference is NestJS **12.1.2**.
 See [DEVIATIONS.md](DEVIATIONS.md) for accepted decisions and current limitations.
 
+## Phase 0 — complete
+
+Closed on **2026-10-05**. The foundation acceptance criteria are met:
+
+- [x] npm workspaces: common, core, platform-node and a separate conformance package.
+- [x] Strict TypeScript 7 configuration and project references.
+- [x] Vite+ toolchain with enforced import/dependency boundaries and negative probes.
+- [x] NestJS 12.1.2 pinned as the development-only compatibility reference.
+- [x] Architecture decisions and current incompatibilities recorded in DEVIATIONS.md.
+- [x] Shared GET/POST fixture compares fetch and Node transport with real NestJS.
+- [x] Clean-install CI passes on Node 22/24, Bun and Deno.
+
+Acceptance evidence: [successful foundation CI run](https://github.com/x-ror/mini-nest/actions/runs/37267383166)
+for commit `3e35788`. Node jobs run the 24-test regression suite, formatting,
+lint/type checks, boundary probes and conformance. Bun/Deno jobs build with Node
+and execute conformance using their Node compatibility APIs.
+
+This closes the foundation only. Native platform adapters, broader differential
+coverage and certification of the oldest Bun/Deno releases remain deferred.
+The next phase is **Common and metadata** (phase 1 in the architecture plan).
+
 ## Development
 
 Node.js 22+ and npm are required. TypeScript 7 compiles legacy decorators without
