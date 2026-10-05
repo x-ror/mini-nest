@@ -186,10 +186,12 @@ response events and manual `write()` calls are not.
 
 ### Benchmarks
 
-The benchmark exercises the same real Nest fixture and `/api` JSON endpoint
-over loopback for a native adapter and the Nest/Express reference. It includes
-Nest's routing, DI, and fixture middleware, but does not model remote clients,
-uploads, static-file workloads, SSE, or reverse-proxy overhead:
+The benchmark exercises the same real Nest fixture over loopback for a native
+adapter and the Nest/Express reference. It supports a JSON GET, a parameterized
+route with repeated query fields, a JSON POST, or a round-robin mix of all
+three. It includes Nest's routing, DI, and fixture middleware, but does not
+model remote clients, uploads, static-file workloads, SSE, or reverse-proxy
+overhead:
 
 ```sh
 pnpm bench          # NodeHttpAdapter on Node
@@ -197,14 +199,16 @@ pnpm bench:express  # Nest/Express on Node
 pnpm bench:bun      # BunHttpAdapter on Bun
 ```
 
-The default run uses 2 seconds of warmup, 10 seconds of measurement, and 32
-concurrent clients. Override these with `BENCH_WARMUP_MS`,
-`BENCH_DURATION_MS`, and `BENCH_CONCURRENCY`. Output includes request rate,
-failures, mean latency, and approximate latency percentile upper bounds from a
-logarithmic histogram. Run each command on an otherwise idle machine, repeat
-runs, and compare like runtimes and environments. This harness is a reproducible
-local baseline, not a production load test or evidence of a performance
-advantage.
+The defaults are three runs, each with 2 seconds of warmup, 10 seconds of
+measurement, and 32 concurrent clients. Configure with `BENCH_RUNS`,
+`BENCH_WARMUP_MS`, `BENCH_DURATION_MS`, and `BENCH_CONCURRENCY`. Select
+`BENCH_WORKLOAD=json|route|post|mixed`; default is `json`. Output includes each
+run's request rate, failures, mean latency, and approximate percentile upper
+bounds from a logarithmic histogram, plus mean throughput and standard
+deviation across runs. Run each mode on an otherwise idle machine and compare
+the same workload, runtime version, and environment. This harness is a
+reproducible local baseline, not a production load test or evidence of a
+performance advantage.
 
 ## Development
 
