@@ -49,6 +49,46 @@ describe("native Nest adapters", () => {
     expect(result.headers.get("x-async")).toBe("yes");
     expect((await fetch(`${await app.getUrl()}/api`)).status).toBe(404);
   });
+  it("parses nested URL-encoded and multipart forms with repeated fields and native files", async () => {
+    const app = await NestFactory.create(FixtureModule, new NodeHttpAdapter(), { logger: false });
+    apps.push(app);
+    await app.listen(0, "127.0.0.1");
+    const base = await app.getUrl();
+
+    const urlEncoded = await fetch(`${base}/api/echo`, {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: "user[name]=Ada&tags[]=one&tags[]=two",
+    });
+    expect(await urlEncoded.json()).toEqual({
+      user: { name: "Ada" },
+      tags: ["one", "two"],
+    });
+    const unsafeField = await fetch(`${base}/api/echo`, {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: "__proto__[polluted]=yes",
+    });
+    expect(unsafeField.status).toBe(400);
+    expect(Object.prototype).not.toHaveProperty("polluted");
+
+    const form = new FormData();
+    form.append("user[name]", "Ada");
+    form.append("tags[]", "one");
+    form.append("tags[]", "two");
+    form.append("upload", new Blob(["hello"]), "hello.txt");
+    const multipart = await fetch(`${base}/api/form`, { method: "POST", body: form });
+    expect(multipart.status).toBe(201);
+    expect(await multipart.json()).toEqual({
+      body: { user: { name: "Ada" }, tags: ["one", "two"], upload: {} },
+      upload: { name: "hello.txt", size: 5, type: "application/octet-stream" },
+    });
+    const oversized = new FormData();
+    oversized.append("payload", "x".repeat(110 * 1024));
+    const tooLarge = await fetch(`${base}/api/echo`, { method: "POST", body: oversized });
+    expect(tooLarge.status).toBe(413);
+    await tooLarge.arrayBuffer();
+  });
   it("responds with 503 while shutting down when configured and remains idempotent on close", async () => {
     const adapter = new NodeHttpAdapter();
     const app = await NestFactory.create(FixtureModule, adapter, {
@@ -88,7 +128,12 @@ describe("native Nest adapters", () => {
   });
   it("supports CORS preflight and static file serving and rejects other unsupported capabilities explicitly", async () => {
     const adapter = new NodeHttpAdapter();
-    adapter.enableCors({ origin: "*", credentials: true, methods: ["GET", "POST"], allowedHeaders: ["content-type", "x-auth"] });
+    adapter.enableCors({
+      origin: "*",
+      credentials: true,
+      methods: ["GET", "POST"],
+      allowedHeaders: ["content-type", "x-auth"],
+    });
     expect(() => adapter.useBodyParser()).toThrow("Custom body parsers");
     expect(() => adapter.render()).toThrow("MVC");
     expect(() =>
@@ -106,7 +151,7 @@ describe("native Nest adapters", () => {
       await mkdir(staticDir, { recursive: true });
       await writeFile(join(staticDir, "index.html"), "<h1>hello</h1>");
       await writeFile(join(staticDir, "app.js"), "console.log('static');");
-      app.useStaticAssets(staticDir, { prefix: "/assets" });
+      adapter.useStaticAssets(staticDir, { prefix: "/assets" });
       await app.listen(0, "127.0.0.1");
       const base = await app.getUrl();
       const preflight = await fetch(`${base}/api`, {

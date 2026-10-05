@@ -193,7 +193,8 @@ export abstract class NativeHttpAdapter<TServer> extends AbstractHttpAdapter<
       if (requestOrigin === undefined) return originOption === true ? "*" : "*";
       if (originOption === true || originOption === "*") return "*";
       if (typeof originOption === "string") return originOption;
-      if (Array.isArray(originOption)) return originOption.includes(requestOrigin) ? requestOrigin : "*";
+      if (Array.isArray(originOption))
+        return originOption.includes(requestOrigin) ? requestOrigin : "*";
       if (typeof originOption === "function") return String(originOption(requestOrigin));
       return requestOrigin;
     };
@@ -208,7 +209,8 @@ export abstract class NativeHttpAdapter<TServer> extends AbstractHttpAdapter<
         res.setHeader("access-control-expose-headers", exposedHeaders.join(", "));
       }
       const isPreflight =
-        req.method === "OPTIONS" && typeof req.headers["access-control-request-method"] === "string";
+        req.method === "OPTIONS" &&
+        typeof req.headers["access-control-request-method"] === "string";
       if (isPreflight) {
         const requestedHeaders =
           typeof req.headers["access-control-request-headers"] === "string"
@@ -227,8 +229,7 @@ export abstract class NativeHttpAdapter<TServer> extends AbstractHttpAdapter<
     root: string | { root?: string; prefix?: string; index?: string; maxAge?: number },
     options: { prefix?: string; index?: string; maxAge?: number } = {},
   ): this {
-    const resolvedRoot =
-      typeof root === "string" ? root : root.root ?? process.cwd();
+    const resolvedRoot = typeof root === "string" ? root : (root.root ?? process.cwd());
     const resolvedOptions = typeof root === "string" ? options : { ...root, ...options };
     const prefix = resolvedOptions.prefix ?? "/";
     const indexName = resolvedOptions.index ?? "index.html";
@@ -267,7 +268,8 @@ export abstract class NativeHttpAdapter<TServer> extends AbstractHttpAdapter<
       if (req.method !== "GET" && req.method !== "HEAD") return next();
       const normalizedPrefix = prefix === "/" ? "/" : prefix.replace(/\/+$/, "");
       if (normalizedPrefix !== "/" && !req.path.startsWith(normalizedPrefix)) return next();
-      const rawPath = normalizedPrefix === "/" ? req.path : req.path.slice(normalizedPrefix.length) || "/";
+      const rawPath =
+        normalizedPrefix === "/" ? req.path : req.path.slice(normalizedPrefix.length) || "/";
       const safePath = rawPath === "/" ? indexName : rawPath.replace(/^\/+/, "");
       const targetPath = resolve(rootPath, safePath);
       const relativeToRoot = relative(rootPath, targetPath);

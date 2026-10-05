@@ -89,6 +89,14 @@ class TestController {
   @Post("echo") echo(@Body() body: unknown) {
     return body;
   }
+  @Post("form") form(@Body() body: Record<string, unknown>) {
+    const upload = body.upload;
+    return {
+      body,
+      upload:
+        upload instanceof File ? { name: upload.name, size: upload.size, type: upload.type } : null,
+    };
+  }
   @Post("raw") raw(@Req() req: NativeRequest) {
     return { raw: req.rawBody?.toString("utf8") };
   }

@@ -38,9 +38,12 @@ experiment has been retired. Explicit `@Inject()` remains usable.
 
 Supported: HTTP routing with `path-to-regexp` 8 syntax, named parameters and
 wildcards, query strings (repeated keys become arrays), global prefixes, URI
-versioning, Nest middleware, JSON and flat URL-encoded bodies, raw bodies,
-status/headers/cookies/redirects, HEAD/no-content responses, `StreamableFile`,
-and Nest's standard request pipeline. Route matching is case-sensitive.
+versioning, Nest middleware, JSON, nested URL-encoded and multipart form bodies,
+raw bodies, status/headers/cookies/redirects, HEAD/no-content responses,
+`StreamableFile`, and Nest's standard request pipeline. Repeated form fields
+become arrays, bracket notation creates nested objects/arrays, and multipart
+file fields are exposed as native `File` values on `@Body()`. Route matching is
+case-sensitive.
 
 The default parsed-body limit is 100 KiB; configure `new NodeHttpAdapter({
 bodyLimit: 1024 * 1024 })` or the same option on Bun. `shutdownTimeout` defaults
@@ -50,7 +53,7 @@ These are **not drop-in Express plugin adapters**. `@Req()` exposes a
 `NativeRequest` with `.raw` (a web `Request`) and Nest's usual data fields.
 `@Res()` exposes `NativeResponse` with `status`, `json`, `send`, `end`,
 `setHeader`, `getHeader`, and `redirect`, not a Node `ServerResponse`.
-No Express-specific middleware APIs, nested form parsing, multipart uploads,
+No Express-specific middleware APIs, Multer-compatible file decorators,
 SSE/direct response writes, WebSocket upgrades, MVC, configurable body parsers,
 HTTPS, or non-URI versioning are provided yet. Basic static file serving and
 CORS are supported through the adapter middleware API with origin/preflight

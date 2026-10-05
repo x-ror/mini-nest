@@ -10,10 +10,11 @@ history, not active workspace packages.
 - Bun uses `Bun.serve`, not `node:http` running under Bun. Its native server is
   wrapped only for Nest's event/address listen contract.
 - Requests and responses use the supported fields/APIs documented in README.
-  SSE, WebSocket upgrades, Node response events, Express plugins, multipart,
-  nested forms, custom parsers, MVC, HTTPS, and non-URI versioning remain
-  outside the initial implementation. Basic static file serving, CORS headers,
-  and preflight handling are supported through the adapter middleware API.
+  SSE, WebSocket upgrades, Node response events, Express plugins, Multer
+  decorators, custom parsers, MVC, HTTPS, and non-URI versioning remain outside
+  the initial implementation. Multipart files are native `File` values in
+  `@Body()`. Basic static file serving, CORS headers, and preflight handling
+  are supported through the adapter middleware API.
 - `path-to-regexp` is a deliberate routing dependency; maintaining a custom
   path grammar would add unnecessary compatibility risk.
 - Middleware path normalization uses Nest's internal `LegacyRouteConverter`,
@@ -25,17 +26,20 @@ history, not active workspace packages.
 ## Roadmap
 
 ### Phase 1: harden the supported baseline
+
 - lock in lifecycle behavior for `close()`, shutdown timeout, and connection aborts
 - add explicit regression coverage for repeated close, 503-on-closing, and listen failures
 - keep the Node/Bun conformance matrix aligned with Nest 12.1.2 and the documented API contract
 
 ### Phase 2: expand supported real-world integrations
-- multipart/form-data and nested form parsing
-- static asset handling and `CORS`
-- HTTPS/TLS deployment guidance via a reverse proxy, without pretending to be a native HTTPS adapter
-- SSE/streaming patterns that fit the native fetch response model
+
+- [x] multipart/form-data and nested form parsing
+- [x] static asset handling and `CORS`
+- [ ] HTTPS/TLS deployment guidance via a reverse proxy, without pretending to be a native HTTPS adapter
+- [ ] SSE/streaming patterns that fit the native fetch response model
 
 ### Phase 3: production readiness
+
 - benchmark the adapters on representative workloads under real traffic
 - document operational caveats for proxying, TLS termination, and body-size limits
 - ship a clear compatibility matrix and migration notes for Express/Fastify users
