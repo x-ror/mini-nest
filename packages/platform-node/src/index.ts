@@ -17,8 +17,13 @@ export class NodeHttpAdapter extends NativeHttpAdapter<Server> {
     this.httpServer = createServer((incoming, outgoing) => {
       void (async () => {
         const headers = new Headers();
-        for (let i = 0; i < incoming.rawHeaders.length; i += 2) {
-          headers.append(incoming.rawHeaders[i]!, incoming.rawHeaders[i + 1]!);
+        for (const [name, value] of Object.entries(incoming.headers)) {
+          if (value === undefined) continue;
+          if (Array.isArray(value)) {
+            for (const entry of value) headers.append(name, entry);
+          } else {
+            headers.set(name, value);
+          }
         }
         const controller = new AbortController();
         outgoing.once("close", () => {

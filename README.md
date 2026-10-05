@@ -189,9 +189,10 @@ response events and manual `write()` calls are not.
 The benchmark exercises the same real Nest fixture over loopback for a native
 adapter and the Nest/Express reference. It supports a JSON GET, a parameterized
 route with repeated query fields, a JSON POST, or a round-robin mix of all
-three. It includes Nest's routing, DI, and fixture middleware, but does not
-model remote clients, uploads, static-file workloads, SSE, or reverse-proxy
-overhead:
+three. The benchmark server runs in a separate child process from the load
+generator to avoid making the server share the client's event loop. It includes
+Nest's routing, DI, and fixture middleware, but does not model remote clients,
+uploads, static-file workloads, SSE, or reverse-proxy overhead:
 
 ```sh
 pnpm bench          # NodeHttpAdapter on Node

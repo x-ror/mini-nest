@@ -1,5 +1,8 @@
 import "reflect-metadata";
+import { spawn } from "node:child_process";
+import { once } from "node:events";
 import { performance } from "node:perf_hooks";
+import { createInterface } from "node:readline";
 import { NestFactory, type AbstractHttpAdapter } from "@nestjs/core";
 import { ExpressAdapter } from "@nestjs/platform-express";
 import { BunHttpAdapter } from "nestjs-adapter-bun";
@@ -8,6 +11,7 @@ import { FixtureModule } from "./fixture.js";
 
 const bunVersion = process.versions.bun;
 const mode = process.argv[2] ?? (bunVersion === undefined ? "node" : "bun");
+const serverMode = process.argv[3] === "--server";
 const durationMs = Number(process.env.BENCH_DURATION_MS ?? 10_000);
 const warmupMs = Number(process.env.BENCH_WARMUP_MS ?? 2_000);
 const concurrency = Number(process.env.BENCH_CONCURRENCY ?? 32);
@@ -32,17 +36,6 @@ if (!["json", "route", "post", "mixed"].includes(workload)) {
 }
 if (mode === "bun" && bunVersion === undefined) throw new Error("Run Bun benchmarks with Bun.");
 if (mode === "node" && bunVersion !== undefined) throw new Error("Run Node benchmarks with Node.");
-
-const adapter: AbstractHttpAdapter =
-  mode === "express"
-    ? new ExpressAdapter()
-    : mode === "bun"
-      ? new BunHttpAdapter()
-      : new NodeHttpAdapter();
-const app = await NestFactory.create(FixtureModule, adapter, {
-  logger: false,
-  abortOnError: false,
-});
 
 type WorkloadRequest = { path: string; init?: RequestInit; expectedStatus: number };
 const workloadRequests: WorkloadRequest[] = [
@@ -119,66 +112,148 @@ async function worker(
   }
 }
 
-try {
+async function runServer(): Promise<void> {
+  const adapter: AbstractHttpAdapter =
+    mode === "express"
+      ? new ExpressAdapter()
+      : mode === "bun"
+        ? new BunHttpAdapter()
+        : new NodeHttpAdapter();
+  const app = await NestFactory.create(FixtureModule, adapter, {
+    logger: false,
+    abortOnError: false,
+  });
   await app.listen(0, "127.0.0.1");
-  const baseUrl = await app.getUrl();
-  const results: RunResult[] = [];
-  for (let run = 0; run < runsCount; run++) {
-    const warmupState = {
-      buckets: new Uint32Array(32),
-      requests: 0,
-      failures: 0,
-      totalLatencyUs: 0,
+  console.log(`BENCH_SERVER_READY ${await app.getUrl()}`);
+  await new Promise<void>((resolve, reject) => {
+    const shutdown = () => {
+      app.close().then(resolve, reject);
     };
-    await Promise.all(
-      Array.from({ length: concurrency }, () =>
-        worker(baseUrl, performance.now() + warmupMs, false, warmupState),
+    process.once("SIGTERM", shutdown);
+    process.once("SIGINT", shutdown);
+  });
+}
+
+async function startServerProcess(): Promise<{ baseUrl: string; stop: () => Promise<void> }> {
+  const scriptPath = process.argv[1];
+  if (!scriptPath) throw new Error("Cannot resolve the benchmark script path.");
+  const child = spawn(process.execPath, [scriptPath, mode, "--server"], {
+    stdio: ["ignore", "pipe", "inherit"],
+    env: process.env,
+  });
+  const lines = createInterface({ input: child.stdout });
+  let serverUrl: string | undefined;
+  const ready = new Promise<string>((resolve, reject) => {
+    const timeout = setTimeout(
+      () => reject(new Error("Timed out waiting for benchmark server.")),
+      30_000,
+    );
+    timeout.unref();
+    child.once("error", (error) => {
+      clearTimeout(timeout);
+      reject(error);
+    });
+    child.once("exit", (code) => {
+      if (!serverUrl) {
+        clearTimeout(timeout);
+        reject(new Error(`Benchmark server exited before startup (code ${code}).`));
+      }
+    });
+    lines.on("line", (line) => {
+      const prefix = "BENCH_SERVER_READY ";
+      if (line.startsWith(prefix)) {
+        serverUrl = line.slice(prefix.length);
+        clearTimeout(timeout);
+        resolve(serverUrl);
+      } else {
+        console.log(line);
+      }
+    });
+  });
+  try {
+    const baseUrl = await ready;
+    return {
+      baseUrl,
+      stop: async () => {
+        if (child.exitCode !== null || child.signalCode !== null) return;
+        child.kill("SIGTERM");
+        await once(child, "exit");
+        lines.close();
+      },
+    };
+  } catch (error) {
+    child.kill("SIGTERM");
+    lines.close();
+    throw error;
+  }
+}
+
+if (serverMode) {
+  await runServer();
+} else {
+  const server = await startServerProcess();
+  try {
+    const baseUrl = server.baseUrl;
+    const results: RunResult[] = [];
+    for (let run = 0; run < runsCount; run++) {
+      const warmupState = {
+        buckets: new Uint32Array(32),
+        requests: 0,
+        failures: 0,
+        totalLatencyUs: 0,
+      };
+      await Promise.all(
+        Array.from({ length: concurrency }, () =>
+          worker(baseUrl, performance.now() + warmupMs, false, warmupState),
+        ),
+      );
+      const state = { ...warmupState, buckets: new Uint32Array(32), requests: 0, failures: 0 };
+      const started = performance.now();
+      const deadline = started + durationMs;
+      await Promise.all(
+        Array.from({ length: concurrency }, () => worker(baseUrl, deadline, true, state)),
+      );
+      const elapsedSeconds = (performance.now() - started) / 1000;
+      results.push({
+        requests: state.requests,
+        failures: state.failures,
+        requestsPerSecond: Math.round(state.requests / elapsedSeconds),
+        meanLatencyMs: Number(
+          (state.totalLatencyUs / Math.max(state.requests, 1) / 1000).toFixed(3),
+        ),
+        p50UpperBoundMs: Number(percentile(state.buckets, state.requests, 0.5).toFixed(3)),
+        p95UpperBoundMs: Number(percentile(state.buckets, state.requests, 0.95).toFixed(3)),
+        p99UpperBoundMs: Number(percentile(state.buckets, state.requests, 0.99).toFixed(3)),
+        elapsedSeconds: Number(elapsedSeconds.toFixed(3)),
+      });
+    }
+    const rates = results.map((result) => result.requestsPerSecond);
+    const averageRate = rates.reduce((total, value) => total + value, 0) / rates.length;
+    const standardDeviation = Math.sqrt(
+      rates.reduce((total, value) => total + (value - averageRate) ** 2, 0) / rates.length,
+    );
+    console.log(
+      JSON.stringify(
+        {
+          mode,
+          workload,
+          runtime: bunVersion === undefined ? `Node ${process.version}` : `Bun ${bunVersion}`,
+          concurrency,
+          warmupMs,
+          durationMs,
+          runs: results,
+          summary: {
+            requestsPerSecondMean: Math.round(averageRate),
+            requestsPerSecondStandardDeviation: Math.round(standardDeviation),
+            failures: results.reduce((total, result) => total + result.failures, 0),
+          },
+        },
+        null,
+        2,
       ),
     );
-    const state = { ...warmupState, buckets: new Uint32Array(32), requests: 0, failures: 0 };
-    const started = performance.now();
-    const deadline = started + durationMs;
-    await Promise.all(
-      Array.from({ length: concurrency }, () => worker(baseUrl, deadline, true, state)),
-    );
-    const elapsedSeconds = (performance.now() - started) / 1000;
-    results.push({
-      requests: state.requests,
-      failures: state.failures,
-      requestsPerSecond: Math.round(state.requests / elapsedSeconds),
-      meanLatencyMs: Number((state.totalLatencyUs / Math.max(state.requests, 1) / 1000).toFixed(3)),
-      p50UpperBoundMs: Number(percentile(state.buckets, state.requests, 0.5).toFixed(3)),
-      p95UpperBoundMs: Number(percentile(state.buckets, state.requests, 0.95).toFixed(3)),
-      p99UpperBoundMs: Number(percentile(state.buckets, state.requests, 0.99).toFixed(3)),
-      elapsedSeconds: Number(elapsedSeconds.toFixed(3)),
-    });
+    if (results.some((result) => result.failures > 0)) process.exitCode = 1;
+  } finally {
+    await server.stop();
   }
-  const rates = results.map((result) => result.requestsPerSecond);
-  const averageRate = rates.reduce((total, value) => total + value, 0) / rates.length;
-  const standardDeviation = Math.sqrt(
-    rates.reduce((total, value) => total + (value - averageRate) ** 2, 0) / rates.length,
-  );
-  console.log(
-    JSON.stringify(
-      {
-        mode,
-        workload,
-        runtime: bunVersion === undefined ? `Node ${process.version}` : `Bun ${bunVersion}`,
-        concurrency,
-        warmupMs,
-        durationMs,
-        runs: results,
-        summary: {
-          requestsPerSecondMean: Math.round(averageRate),
-          requestsPerSecondStandardDeviation: Math.round(standardDeviation),
-          failures: results.reduce((total, result) => total + result.failures, 0),
-        },
-      },
-      null,
-      2,
-    ),
-  );
-  if (results.some((result) => result.failures > 0)) process.exitCode = 1;
-} finally {
-  await app.close();
 }
