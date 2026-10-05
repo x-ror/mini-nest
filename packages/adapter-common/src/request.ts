@@ -20,8 +20,12 @@ function queryObject(values: URLSearchParams): Record<string, string | string[]>
   const result: Record<string, string | string[]> = Object.create(null);
   for (const [key, value] of values) {
     const previous = result[key];
-    result[key] = previous === undefined ? value :
-      Array.isArray(previous) ? [...previous, value] : [previous, value];
+    result[key] =
+      previous === undefined
+        ? value
+        : Array.isArray(previous)
+          ? [...previous, value]
+          : [previous, value];
   }
   return result;
 }
@@ -29,18 +33,33 @@ function queryObject(values: URLSearchParams): Record<string, string | string[]>
 export function createRequest(raw: Request, ip?: string): NativeRequest {
   const url = new URL(raw.url);
   return {
-    raw, ip, method: raw.method, url: `${url.pathname}${url.search}`,
-    originalUrl: `${url.pathname}${url.search}`, path: url.pathname, hostname: url.hostname,
-    protocol: url.protocol.slice(0, -1), headers: Object.fromEntries(raw.headers),
-    params: Object.create(null), query: queryObject(url.searchParams),
+    raw,
+    ip,
+    method: raw.method,
+    url: `${url.pathname}${url.search}`,
+    originalUrl: `${url.pathname}${url.search}`,
+    path: url.pathname,
+    hostname: url.hostname,
+    protocol: url.protocol.slice(0, -1),
+    headers: Object.fromEntries(raw.headers),
+    params: Object.create(null),
+    query: queryObject(url.searchParams),
   };
 }
 
-export async function parseRequestBody(request: NativeRequest, limit: number, rawBody: boolean): Promise<void> {
+export async function parseRequestBody(
+  request: NativeRequest,
+  limit: number,
+  rawBody: boolean,
+): Promise<void> {
   if (request.method === "GET" || request.method === "HEAD" || !request.raw.body) return;
   const type = request.headers["content-type"]?.split(";")[0]?.trim().toLowerCase();
-  if (type !== "application/json" && !type?.endsWith("+json") &&
-    type !== "application/x-www-form-urlencoded") return;
+  if (
+    type !== "application/json" &&
+    !type?.endsWith("+json") &&
+    type !== "application/x-www-form-urlencoded"
+  )
+    return;
   const reader = request.raw.body.getReader();
   const chunks: Uint8Array[] = [];
   let size = 0;
@@ -60,7 +79,10 @@ export async function parseRequestBody(request: NativeRequest, limit: number, ra
   }
   const bytes = Buffer.concat(chunks);
   if (rawBody) request.rawBody = bytes;
-  if (!size) { request.body = {}; return; }
+  if (!size) {
+    request.body = {};
+    return;
+  }
   const text = bytes.toString("utf8");
   if (type === "application/x-www-form-urlencoded") {
     request.body = queryObject(new URLSearchParams(text));
@@ -68,7 +90,8 @@ export async function parseRequestBody(request: NativeRequest, limit: number, ra
   }
   try {
     const parsed: unknown = JSON.parse(text);
-    if (parsed === null || typeof parsed !== "object") throw new SyntaxError("JSON body must be an object or array");
+    if (parsed === null || typeof parsed !== "object")
+      throw new SyntaxError("JSON body must be an object or array");
     request.body = parsed;
   } catch (error) {
     if (!(error instanceof SyntaxError)) throw error;

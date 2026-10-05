@@ -12,5 +12,8 @@
   "dependencies": {
     "@nest-native/adapter-common": "0.1.0"
   },
-  "peerDependencies": { "@nestjs/common": "^12.1.2", "@nestjs/core": "^12.1.2" }
+  "peerDependencies": {
+    "@nestjs/common": "^12.1.2",
+    "@nestjs/core": "^12.1.2"
+  }
 }

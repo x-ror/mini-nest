@@ -5,7 +5,12 @@
     "outDir": "dist",
     "types": ["node"]
   },
-  "include": ["examples/**/*.ts", "tests/**/*.ts", "vite.config.ts"],
+  "include": [
+    "examples/**/*.ts",
+    "tests/**/*.ts",
+    "packages/conformance/src/**/*.ts",
+    "vite.config.ts"
+  ],
   "references": [
     { "path": "./packages/adapter-common" },
     { "path": "./packages/platform-bun" },

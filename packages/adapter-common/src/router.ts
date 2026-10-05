@@ -3,6 +3,16 @@ import { match, type MatchFunction } from "path-to-regexp";
 import type { NativeRequest } from "./request.js";
 import type { NativeResponse } from "./response.js";
 
+function decodeParameter(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch (error) {
+    if (error instanceof URIError)
+      throw new BadRequestException(`Failed to decode param '${value}'`);
+    throw error;
+  }
+}
+
 export type Next = (error?: unknown) => void;
 export type Handler = (request: NativeRequest, response: NativeResponse, next: Next) => unknown;
 interface Layer {
@@ -13,24 +23,43 @@ interface Layer {
 
 export class NativeRouter {
   private readonly layers: Layer[] = [];
-  use(path: string, handler: Handler): void { this.add(undefined, path, handler, false); }
-  route(method: string, path: string, handler: Handler): void { this.add(method, path, handler, true); }
+  use(path: string, handler: Handler): void {
+    this.add(undefined, path, handler, false);
+  }
+  route(method: string, path: string, handler: Handler): void {
+    this.add(method, path, handler, true);
+  }
   private add(method: string | undefined, path: string, handler: Handler, end: boolean): void {
-    this.layers.push({ method, handler, match: match(path, { end, sensitive: true, trailing: true }) });
+    this.layers.push({
+      method,
+      handler,
+      match:
+        !end && path === "/"
+          ? (value) => ({ path: value, params: Object.create(null) })
+          : match(path, { end, sensitive: true, trailing: true, decode: decodeParameter }),
+    });
   }
 
   async run(request: NativeRequest, response: NativeResponse, notFound: Handler): Promise<void> {
     const dispatch = async (index: number): Promise<void> => {
       if (response.headersSent) return;
       const layer = this.layers[index];
-      if (!layer) { await notFound(request, response, () => {}); return; }
-      if (layer.method && layer.method !== "ALL" && layer.method !== request.method &&
-        !(request.method === "HEAD" && layer.method === "GET")) {
+      if (!layer) {
+        await notFound(request, response, () => {});
+        return;
+      }
+      if (
+        layer.method &&
+        layer.method !== "ALL" &&
+        layer.method !== request.method &&
+        !(request.method === "HEAD" && layer.method === "GET")
+      ) {
         return dispatch(index + 1);
       }
       let result;
-      try { result = layer.match(request.path); }
-      catch (error) {
+      try {
+        result = layer.match(request.path);
+      } catch (error) {
         if (error instanceof URIError) throw new BadRequestException("Invalid route parameter");
         throw error;
       }
@@ -38,7 +67,9 @@ export class NativeRouter {
       if (layer.method) request.params = result.params;
       let called = false;
       let proceed!: (error?: unknown) => void;
-      const continuation = new Promise<unknown>((resolve) => { proceed = resolve; });
+      const continuation = new Promise<unknown>((resolve) => {
+        proceed = resolve;
+      });
       const next: Next = (error) => {
         if (called) throw new Error("next() may only be called once.");
         called = true;

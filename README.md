@@ -1,205 +1,85 @@
-# mini-nest
+# nest-native-adapters
 
-A NestJS-style backend framework with a fetch-native core, thin runtime adapters
-and no external framework runtime dependencies. **Phase 0 foundation** of
-`Nestjs alternative architecture plan.txt` is implemented; this is not a
-drop-in NestJS replacement. The compatibility reference is NestJS **12.1.2**.
-See [DEVIATIONS.md](DEVIATIONS.md) for accepted decisions and current limitations.
+Experimental native HTTP adapters for **real NestJS**: `node:http` on Node.js and
+`Bun.serve` on Bun. This is not an alternative Nest core. Nest owns modules, DI,
+decorators, guards, pipes, interceptors, exception filters, and application lifecycle.
 
-## Phase 0 — complete
+## Packages
 
-Closed on **2026-10-05**. The foundation acceptance criteria are met:
+| Package                       | Role                                            |
+| ----------------------------- | ----------------------------------------------- |
+| `@nest-native/platform-node`  | `NodeHttpAdapter`, backed by `node:http`        |
+| `@nest-native/platform-bun`   | `BunHttpAdapter`, backed by `Bun.serve`         |
+| `@nest-native/adapter-common` | Shared router, request parsing, response facade |
 
-- [x] npm workspaces: common, core, platform-node and a separate conformance package.
-- [x] Strict TypeScript 7 configuration and project references.
-- [x] Vite+ toolchain with enforced import/dependency boundaries and negative probes.
-- [x] NestJS 12.1.2 pinned as the development-only compatibility reference.
-- [x] Architecture decisions and current incompatibilities recorded in DEVIATIONS.md.
-- [x] Shared GET/POST fixture compares fetch and Node transport with real NestJS.
-- [x] Clean-install CI passes on Node 22/24, Bun and Deno.
+Packages are workspace-only for now, not published to npm. Supported baseline:
+NestJS **12.1.2**, Node.js 22+, current Bun. Other Nest versions are not yet verified.
+Neither adapter uses Express or Fastify. Express is a test-only reference.
 
-Acceptance evidence: [successful foundation CI run](https://github.com/x-ror/mini-nest/actions/runs/37267383166)
-for commit `3e35788`. Node jobs run the 24-test regression suite, formatting,
-lint/type checks, boundary probes and conformance. Bun/Deno jobs build with Node
-and execute conformance using their Node compatibility APIs.
-
-This closes the foundation only. Native platform adapters, broader differential
-coverage and certification of the oldest Bun/Deno releases remain deferred.
-Phase 1 is described below; the next runtime milestone is phase 2.
-
-## Phase 1 — Common and metadata
-
-The phase 1 contract layer is implemented:
-
-- Public DI types: `InjectionToken`, `Provider` variants, `DynamicModule`,
-  `ForwardReference`, `Scope`, controller options and lifecycle interfaces.
-- DI/module decorators: `@Injectable(options)`, constructor/property `@Inject`,
-  `@Optional`, `@Global`, `forwardRef` and `@Module` metadata.
-- HTTP metadata: controller/method path arrays, `@All`, `@Headers`, `@Ip`,
-  `@Res`, `@Header`, `@Redirect`, `@Version` and parameter pipes/schema options.
-- Enhancer contracts/decorators: `CanActivate`, `PipeTransform`, Promise-first
-  `NestInterceptor`, `ExceptionFilter`, `@Use*`, `@Catch` and custom parameters.
-- `SetMetadata`, `applyDecorators` and typed `Reflector` decorators with inherited
-  lookup, override and merge. Import `Reflector` from `@mini-nest/core`.
-- `HttpStatus`, `HttpException` and the built-in HTTP exception family.
-- Standalone `Logger`/`ConsoleLogger`: levels, context, buffering, custom logger
-  delegation, timestamps, JSON output and optional colors.
-
-Internal WeakMaps are separated into module, provider, route, parameter, enhancer
-and custom metadata. Reflection is never installed by the framework. Existing
-`Reflect.getMetadata` is read only when available: constructor `design:paramtypes`,
-property `design:type` and handler parameter metatypes. Explicit injection tokens
-override inferred ones. The default compiler setting still emits no design metadata.
-
-**Metadata support is not runtime support.** Custom providers, dynamic/global
-modules, optional/property injection and forwardRef execution belong to phase 2;
-response/header/redirect/version options belong to phase 3; enhancers, pipes and
-custom parameter execution belong to phase 4. The current bootstrap rejects these
-features explicitly instead of ignoring their decorators. Plain path arrays and
-`@All` are already routed. The HTTP pipeline does not yet serialize HttpException
-responses; phase 1 verifies exceptions directly, not through HTTP.
-
-Compile-only examples live in `packages/conformance/src/contracts.ts`.
-`decorator-fixture.ts` uses the same decorator calls with mini-nest and NestJS.
-Conformance additionally compares 21 reference exception classes, exception
-causes/codes, HttpStatus and Reflector behavior. Advanced ConsoleLogger inspection,
-redaction and structured logging options are not implemented and are rejected;
-see DEVIATIONS.md. This is a tested public subset, not full NestJS API parity.
-
-## Development
-
-Node.js 22+ and npm are required. TypeScript 7 compiles legacy decorators without
-emitted design-type metadata.
-
-Install workspace dependencies with `npm install` to bootstrap the local Vite+
-CLI (or `vp install` if Vite+ is already installed globally).
-
-```sh
-npx vp run dev
-npx vp run check
-npx vp run test
-npx vp run build
-npx vp run start
-```
-
-Vite+ owns the development toolchain: `vp pack` bundles libraries and the backend,
-`vp pack --watch --on-success` rebuilds/restarts the example, `vp test` runs Vitest,
-and `vp check` combines Oxfmt, Oxlint and TypeScript 7 type checking. There is no
-ESLint, Babel or tsc-watch configuration/dependency. `npm run` wrappers remain
-available for the same tasks.
-
-`npx vp run fmt` formats sources/configuration/docs; `npx vp run typecheck` checks
-types without emitting artifacts. TypeScript project references still describe
-the dependency graph, while packaging emits JavaScript, declarations and source maps.
-
-```sh
-curl http://127.0.0.1:3000/hello
-curl -X POST http://127.0.0.1:3000/hello/echo \
-  -H 'Content-Type: application/json' -d '{"message":"Hi"}'
-```
-
-## Workspace architecture
-
-```text
-packages/common/          Public decorators/types, adapter contract, internal metadata
-packages/core/            Application, NestFactory, di/, http/, routing/
-packages/platform-node/   NodeAdapter and node:http transport
-packages/conformance/     Same fixture using mini-nest and real NestJS decorators
-examples/                 Backend example
-tests/                    Unit and HTTP regression tests
-```
-
-`common` has no dependencies. `core` and `platform-node` depend only on `common`.
-Core has no Node imports, and the platform does not import core.
-DI cannot import HTTP/routing. TypeScript project references, Oxlint import
-boundaries and manifest checks enforce these rules. The internal common subpaths
-are reserved for core and must not be imported by application code.
-
-The custom Oxlint plugin imports only Vite+'s plugin API. `vp run check` also
-verifies package manifests and runs negative import probes against the actual
-linter, cleaning up their temporary fixture files afterward.
-
-Packages are private workspaces for now; publishing is not configured. NestJS,
-Express, RxJS and reflect-metadata are **development-only conformance dependencies**.
-Importing framework packages does not load or install reflection APIs.
-
-## Example API
+## Usage
 
 ```ts
-import { Controller, Get, Inject, Injectable, Module } from "@mini-nest/common";
-import { NestFactory } from "@mini-nest/core";
-import { NodeAdapter } from "@mini-nest/platform-node";
+import "reflect-metadata";
+import { NestFactory } from "@nestjs/core";
+import { NodeHttpAdapter } from "@nest-native/platform-node";
+import { AppModule } from "./app.js";
 
-@Injectable()
-class HelloService {
-  hello() {
-    return { message: "Hello!" };
-  }
-}
-
-@Controller("hello")
-class HelloController {
-  constructor(@Inject(HelloService) private readonly service: HelloService) {}
-
-  @Get()
-  hello() {
-    return this.service.hello();
-  }
-}
-
-@Module({ controllers: [HelloController], providers: [HelloService] })
-class AppModule {}
-
-const app = await NestFactory.create(AppModule, new NodeAdapter());
+const app = await NestFactory.create(AppModule, new NodeHttpAdapter());
 await app.listen(3000);
 ```
 
-Use `@mini-nest/common` for decorators, `@mini-nest/core` for bootstrap and
-`@mini-nest/platform-node` for the adapter. The former root `mini-nest` imports
-have been replaced by these workspace entry points.
+For Bun, replace `NodeHttpAdapter` with `BunHttpAdapter` from
+`@nest-native/platform-bun` and run the application using Bun.
+Actual Nest requires `reflect-metadata`; the previous no-reflection framework
+experiment has been retired. Explicit `@Inject()` remains usable.
 
-Providers use explicit constructor `@Inject(Class)` and `@Injectable` by default.
-Automatic class constructor injection also works when design metadata is available.
-Missing injection on required constructor arguments is a bootstrap error.
-Module imports share singletons; only exported providers are visible to importers.
-Optional/defaulted dependencies must also be decorated to request injection.
+## Current scope
 
-HTTP supports method decorators, `@HttpCode`, `@Body`, `@Req`, `@Query`, `@Param`,
-literal paths, named params and global prefixes. POST defaults to 201. Object
-results become JSON, strings text/html, undefined an empty response; Web Response
-and async handlers are supported. Node bodies/responses are currently buffered.
+Supported: HTTP routing with `path-to-regexp` 8 syntax, named parameters and
+wildcards, query strings (repeated keys become arrays), global prefixes, URI
+versioning, Nest middleware, JSON and flat URL-encoded bodies, raw bodies,
+status/headers/cookies/redirects, HEAD/no-content responses, `StreamableFile`,
+and Nest's standard request pipeline. Route matching is case-sensitive.
 
-Without an adapter, `app.fetch` works directly:
+The default parsed-body limit is 100 KiB; configure `new NodeHttpAdapter({
+bodyLimit: 1024 * 1024 })` or the same option on Bun. `shutdownTimeout` defaults
+to 5000 ms, after which outstanding connections are forcibly closed.
 
-```ts
-const app = await NestFactory.create(AppModule);
-export default { fetch: app.fetch };
-```
+These are **not drop-in Express plugin adapters**. `@Req()` exposes a
+`NativeRequest` with `.raw` (a web `Request`) and Nest's usual data fields.
+`@Res()` exposes `NativeResponse` with `status`, `json`, `send`, `end`,
+`setHeader`, `getHeader`, and `redirect`, not a Node `ServerResponse`.
+No Express-specific middleware APIs, nested form parsing, multipart uploads,
+SSE/direct response writes, WebSocket upgrades, MVC, static assets, configurable
+body parsers, HTTPS, CORS, or non-URI versioning are provided yet. Unsupported
+adapter configuration throws instead of silently doing nothing. Use a reverse
+proxy for TLS; do not assume browser cross-origin access is enabled.
 
-This is the serverless boundary, not platform-specific deployment packaging.
+The Node adapter exposes its real HTTP server through `getHttpServer()`.
+The Bun adapter exposes a small event/address facade for Nest's listen lifecycle,
+with the actual Bun server at `.native`; it is not a Node server or a WebSocket
+adapter. Fetch response streaming is supported for files, but arbitrary Node
+response events are not.
 
-## Compatibility and runtime checks
-
-`vp run test` runs the regression suite on TypeScript sources, packages the workspaces,
-then compares the shared
-GET/POST fixture through mini-nest fetch, Node transport and NestJS + Express.
-It also runs the phase 1 Common/Reflector differential checks on all three runtimes.
-Conformance compares status, Content-Type and body, excluding transport-specific
-headers such as Date, ETag and Content-Length.
-
-After building, the same conformance program can run on other installed runtimes:
+## Development
 
 ```sh
-bun packages/conformance/dist/smoke.js
-deno run --allow-net --allow-env --allow-read --allow-sys --node-modules-dir=manual packages/conformance/dist/smoke.js
+npm install
+npx vp run check
+npx vp run test
+npx vp run test:bun
+npx vp run dev
 ```
 
-CI runs the full Node suite on Node 22/24 and the shared conformance program on
-current Bun/Deno. These use Node compatibility APIs; native Bun/Deno adapters,
-runtime-specific suites and earliest supported-version certification are deferred.
+`dev` watches the Node example; `vp run build` builds both example entrypoints.
+Run `bun dist/bun.js` for the Bun example. Both expose `/hello/world` on port 3000.
+Vite+ handles builds, watch, formatting, Oxlint, type checks, and Vitest.
+TypeScript 7 is retained. No ESLint, Babel, or tsc-watch.
 
-Next phases follow the architecture document: ModuleGraph + Injector + Container
-and lifecycle (phase 2), then HTTP facades, router,
-pipeline and adapter v2. Existing behavior remains unchanged except that serialized JSON now includes
-`charset=utf-8` in Content-Type to match the reference. Known incompatibilities
-are recorded in DEVIATIONS.md.
+Conformance checks execute the same real Nest module on each native adapter and
+Nest/Express. This is a compatibility baseline, not full framework conformance
+or evidence of a performance advantage. Benchmarks and production hardening
+remain future work. The former alternative-core prototype is retained only in
+Git history; its phases no longer describe this project's roadmap.
+
+Repository: <https://github.com/x-ror/nest-native-adapters>
