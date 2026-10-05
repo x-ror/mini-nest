@@ -1,6 +1,6 @@
 import { createServer, type Server } from "node:http";
 import { PassThrough, Readable } from "node:stream";
-import { pipeline } from "node:stream/promises";
+import { finished } from "node:stream/promises";
 import type { NestApplicationOptions } from "@nestjs/common";
 import { NativeHttpAdapter } from "@shared";
 
@@ -60,10 +60,16 @@ export class NodeHttpAdapter extends NativeHttpAdapter<Server> {
           outgoing.end();
           return;
         }
-        await pipeline(
-          Readable.fromWeb(response.body as import("node:stream/web").ReadableStream<Uint8Array>),
-          outgoing,
+        const responseStream = Readable.fromWeb(
+          response.body as import("node:stream/web").ReadableStream<Uint8Array>,
         );
+        const responseFinished = finished(outgoing, { cleanup: true });
+        responseStream.once("error", (error) => outgoing.destroy(error));
+        outgoing.once("close", () => {
+          if (!outgoing.writableFinished) responseStream.destroy();
+        });
+        responseStream.pipe(outgoing);
+        await responseFinished;
       })().catch((error: unknown) => {
         console.error("Node HTTP transport failed", error);
         if (outgoing.headersSent) {
