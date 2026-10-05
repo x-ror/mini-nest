@@ -141,6 +141,13 @@ export class NativeResponse {
       this.headers.delete("transfer-encoding");
     }
     const omit = this.method === "HEAD" || [204, 205, 304].includes(this.statusCode);
+    if (!omit && body !== null && !this.headers.has("content-length")) {
+      if (typeof body === "string") {
+        this.headers.set("content-length", String(Buffer.byteLength(body)));
+      } else if (body instanceof Uint8Array) {
+        this.headers.set("content-length", String(body.byteLength));
+      }
+    }
     const response = new Response(omit ? null : body, {
       status: this.statusCode,
       headers: this.headers,
