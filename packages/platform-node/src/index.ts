@@ -8,6 +8,9 @@ export { NativeResponse } from "@shared";
 
 export type { NativeAdapterOptions, NativeRequest } from "@shared";
 
+// Bodies up to this declared size are buffered and written in a single call.
+const SMALL_BODY_LIMIT = 64 * 1024;
+
 export class NodeHttpAdapter extends NativeHttpAdapter<Server> {
   private forceCloseConnections = false;
 
@@ -58,6 +61,12 @@ export class NodeHttpAdapter extends NativeHttpAdapter<Server> {
         if (cookies.length) outgoing.setHeader("set-cookie", cookies);
         if (!response.body) {
           outgoing.end();
+          return;
+        }
+        const length = Number(response.headers.get("content-length"));
+        if (length > 0 && length <= SMALL_BODY_LIMIT) {
+          const bytes = Buffer.from(await response.arrayBuffer());
+          if (!outgoing.destroyed) outgoing.end(bytes);
           return;
         }
         const responseStream = Readable.fromWeb(
