@@ -1,0 +1,20 @@
+{
+  "name": "@mini-nest/common",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./internal/metadata": {
+      "types": "./dist/internal/metadata.d.ts",
+      "import": "./dist/internal/metadata.js"
+    },
+    "./internal/path": {
+      "types": "./dist/internal/path.d.ts",
+      "import": "./dist/internal/path.js"
+    }
+  }
+}

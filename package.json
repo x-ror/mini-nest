@@ -1,0 +1,33 @@
+{
+  "name": "mini-nest",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": [
+    "packages/*"
+  ],
+  "type": "module",
+  "scripts": {
+    "dev": "vp pack --filter example --watch --on-success \"node dist/server.js\"",
+    "build": "vp pack",
+    "check": "vp check && vp run boundaries",
+    "typecheck": "vp check --no-fmt --no-lint",
+    "lint": "vp lint && vp run boundaries",
+    "fmt": "vp fmt",
+    "fmt:check": "vp fmt --check",
+    "start": "node dist/server.js",
+    "test": "vp test run && vp run test:conformance",
+    "test:conformance": "vp pack && node packages/conformance/dist/smoke.js"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.4",
+    "typescript": "^7.0.2",
+    "vite-plus": "^1.0.0"
+  },
+  "overrides": {
+    "vite": "npm:@voidzero-dev/vite-plus-core@1.0.0",
+    "vitest": "5.0.1"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
