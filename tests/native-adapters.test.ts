@@ -47,6 +47,20 @@ describe("native Nest adapters", () => {
     expect(result.headers.get("x-async")).toBe("yes");
     expect((await fetch(`${await app.getUrl()}/api`)).status).toBe(404);
   });
+  it("responds with 503 while shutting down when configured and remains idempotent on close", async () => {
+    const adapter = new NodeHttpAdapter();
+    const app = await NestFactory.create(FixtureModule, adapter, {
+      logger: false,
+      return503OnClosing: true,
+    });
+    apps.push(app);
+    await app.init();
+    adapter.beforeClose();
+    const result = await adapter.fetch(new Request("http://localhost/api"));
+    expect(result.status).toBe(503);
+    await expect(app.close()).resolves.toBeUndefined();
+    await expect(app.close()).resolves.toBeUndefined();
+  });
   it("routes middleware next(error) through Nest's exception layer", async () => {
     const app = await NestFactory.create(FixtureModule, new NodeHttpAdapter(), { logger: false });
     apps.push(app);
@@ -82,6 +96,7 @@ describe("native Nest adapters", () => {
     expect(() => adapter.initHttpServer({ httpsOptions: {} })).toThrow("HTTPS");
     expect(() => new BunHttpAdapter().initHttpServer({})).toThrow("Bun runtime");
     expect(() => new NodeHttpAdapter({ bodyLimit: -1 })).toThrow("bodyLimit");
+    expect(() => new NodeHttpAdapter({ shutdownTimeout: -1 })).toThrow("shutdownTimeout");
   });
   it("preserves multiple cookies and omits bodies for HEAD and 204", async () => {
     const adapter = new NodeHttpAdapter();

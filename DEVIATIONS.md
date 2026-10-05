@@ -20,3 +20,21 @@ history, not active workspace packages.
 - Redirects always return a plain-text body, rather than Express's optional
   Accept-negotiated HTML redirect page.
 - Performance claims require separate benchmarks. Deno is no longer a target.
+
+## Roadmap
+
+### Phase 1: harden the supported baseline
+- lock in lifecycle behavior for `close()`, shutdown timeout, and connection aborts
+- add explicit regression coverage for repeated close, 503-on-closing, and listen failures
+- keep the Node/Bun conformance matrix aligned with Nest 12.1.2 and the documented API contract
+
+### Phase 2: expand supported real-world integrations
+- multipart/form-data and nested form parsing
+- static asset handling and `CORS`
+- HTTPS/TLS deployment guidance via a reverse proxy, without pretending to be a native HTTPS adapter
+- SSE/streaming patterns that fit the native fetch response model
+
+### Phase 3: production readiness
+- benchmark the adapters on representative workloads under real traffic
+- document operational caveats for proxying, TLS termination, and body-size limits
+- ship a clear compatibility matrix and migration notes for Express/Fastify users
