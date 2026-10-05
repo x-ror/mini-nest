@@ -25,7 +25,46 @@ and execute conformance using their Node compatibility APIs.
 
 This closes the foundation only. Native platform adapters, broader differential
 coverage and certification of the oldest Bun/Deno releases remain deferred.
-The next phase is **Common and metadata** (phase 1 in the architecture plan).
+Phase 1 is described below; the next runtime milestone is phase 2.
+
+## Phase 1 — Common and metadata
+
+The phase 1 contract layer is implemented:
+
+- Public DI types: `InjectionToken`, `Provider` variants, `DynamicModule`,
+  `ForwardReference`, `Scope`, controller options and lifecycle interfaces.
+- DI/module decorators: `@Injectable(options)`, constructor/property `@Inject`,
+  `@Optional`, `@Global`, `forwardRef` and `@Module` metadata.
+- HTTP metadata: controller/method path arrays, `@All`, `@Headers`, `@Ip`,
+  `@Res`, `@Header`, `@Redirect`, `@Version` and parameter pipes/schema options.
+- Enhancer contracts/decorators: `CanActivate`, `PipeTransform`, Promise-first
+  `NestInterceptor`, `ExceptionFilter`, `@Use*`, `@Catch` and custom parameters.
+- `SetMetadata`, `applyDecorators` and typed `Reflector` decorators with inherited
+  lookup, override and merge. Import `Reflector` from `@mini-nest/core`.
+- `HttpStatus`, `HttpException` and the built-in HTTP exception family.
+- Standalone `Logger`/`ConsoleLogger`: levels, context, buffering, custom logger
+  delegation, timestamps, JSON output and optional colors.
+
+Internal WeakMaps are separated into module, provider, route, parameter, enhancer
+and custom metadata. Reflection is never installed by the framework. Existing
+`Reflect.getMetadata` is read only when available: constructor `design:paramtypes`,
+property `design:type` and handler parameter metatypes. Explicit injection tokens
+override inferred ones. The default compiler setting still emits no design metadata.
+
+**Metadata support is not runtime support.** Custom providers, dynamic/global
+modules, optional/property injection and forwardRef execution belong to phase 2;
+response/header/redirect/version options belong to phase 3; enhancers, pipes and
+custom parameter execution belong to phase 4. The current bootstrap rejects these
+features explicitly instead of ignoring their decorators. Plain path arrays and
+`@All` are already routed. The HTTP pipeline does not yet serialize HttpException
+responses; phase 1 verifies exceptions directly, not through HTTP.
+
+Compile-only examples live in `packages/conformance/src/contracts.ts`.
+`decorator-fixture.ts` uses the same decorator calls with mini-nest and NestJS.
+Conformance additionally compares 21 reference exception classes, exception
+causes/codes, HttpStatus and Reflector behavior. Advanced ConsoleLogger inspection,
+redaction and structured logging options are not implemented and are rejected;
+see DEVIATIONS.md. This is a tested public subset, not full NestJS API parity.
 
 ## Development
 
@@ -119,7 +158,8 @@ Use `@mini-nest/common` for decorators, `@mini-nest/core` for bootstrap and
 `@mini-nest/platform-node` for the adapter. The former root `mini-nest` imports
 have been replaced by these workspace entry points.
 
-Providers currently use explicit constructor `@Inject(Class)` and `@Injectable`.
+Providers use explicit constructor `@Inject(Class)` and `@Injectable` by default.
+Automatic class constructor injection also works when design metadata is available.
 Missing injection on required constructor arguments is a bootstrap error.
 Module imports share singletons; only exported providers are visible to importers.
 Optional/defaulted dependencies must also be decorated to request injection.
@@ -143,6 +183,7 @@ This is the serverless boundary, not platform-specific deployment packaging.
 `vp run test` runs the regression suite on TypeScript sources, packages the workspaces,
 then compares the shared
 GET/POST fixture through mini-nest fetch, Node transport and NestJS + Express.
+It also runs the phase 1 Common/Reflector differential checks on all three runtimes.
 Conformance compares status, Content-Type and body, excluding transport-specific
 headers such as Date, ETag and Content-Length.
 
@@ -157,8 +198,8 @@ CI runs the full Node suite on Node 22/24 and the shared conformance program on
 current Bun/Deno. These use Node compatibility APIs; native Bun/Deno adapters,
 runtime-specific suites and earliest supported-version certification are deferred.
 
-Next phases follow the architecture document: common contracts/metadata, then
-ModuleGraph + Injector + Container and lifecycle, then HTTP facades, router,
+Next phases follow the architecture document: ModuleGraph + Injector + Container
+and lifecycle (phase 2), then HTTP facades, router,
 pipeline and adapter v2. Existing behavior remains unchanged except that serialized JSON now includes
 `charset=utf-8` in Content-Type to match the reference. Known incompatibilities
 are recorded in DEVIATIONS.md.

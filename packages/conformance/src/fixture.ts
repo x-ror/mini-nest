@@ -2,8 +2,10 @@ import type * as Common from "@mini-nest/common";
 
 type FixtureDecorators = Pick<
   typeof Common,
-  "Controller" | "Get" | "Post" | "Body" | "Inject" | "Injectable" | "Module"
->;
+  "Get" | "Post" | "Body" | "Inject" | "Injectable" | "Module"
+> & {
+  Controller: (prefix: string) => ClassDecorator;
+};
 
 export function createFixture(decorators: FixtureDecorators) {
   const { Controller, Get, Post, Body, Inject, Injectable, Module } = decorators;

@@ -28,6 +28,8 @@ try {
   const { createReference } = await import("./nest-reference.js");
   const reference = await createReference();
   try {
+    const { verifyCommonContracts } = await import("./common-contracts.js");
+    verifyCommonContracts();
     const cases: Array<{ path: string; init?: RequestInit }> = [
       { path: "/hello" },
       {

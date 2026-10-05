@@ -50,7 +50,7 @@ export class Router {
     const localSegments = segments.slice(this.prefixSegments.length);
     const route = this.routes.find(
       (candidate) =>
-        candidate.method === method &&
+        (candidate.method === method || candidate.method === "ALL") &&
         candidate.segments.length === localSegments.length &&
         candidate.segments.every(
           (segment, index) => segment.startsWith(":") || segment === localSegments[index],

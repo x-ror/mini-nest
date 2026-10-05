@@ -1,10 +1,17 @@
 import {
   controllers,
   injectable,
-  injections,
+  constructorDependencies,
+  globalModules,
+  isClassToken,
+  optionalInjections,
+  optionalProperties,
+  propertyInjections,
+  providerOptions,
   modules,
   type Type,
 } from "@mini-nest/common/internal/metadata";
+import { Scope } from "@mini-nest/common";
 
 interface ModuleRef {
   type: Type;
@@ -38,21 +45,34 @@ export class Container {
     if (existing) return existing;
     const metadata = modules.get(type);
     if (!metadata) throw new Error(`${type.name} must have a @Module decorator.`);
+    if (globalModules.has(type)) throw new Error("@Global runtime support requires phase 2.");
+    const imports = metadata.imports ?? [];
+    const providers = metadata.providers ?? [];
+    const exports = metadata.exports ?? [];
+    if (
+      !imports.every(isClassToken) ||
+      !providers.every(isClassToken) ||
+      !exports.every(isClassToken)
+    ) {
+      throw new Error("Custom providers, dynamic modules and non-class tokens require phase 2.");
+    }
 
     const ref: ModuleRef = {
       type,
       imports: [],
-      providers: new Set(metadata.providers),
+      providers: new Set(providers),
       controllers: metadata.controllers ?? [],
-      exports: new Set(metadata.exports),
+      exports: new Set(exports),
       instances: new Map(),
     };
     for (const provider of ref.providers) {
+      this.validateProviderFeatures(provider);
       if (!injectable.has(provider)) {
         throw new Error(`${provider.name} must have an @Injectable decorator.`);
       }
     }
     for (const controller of ref.controllers) {
+      this.validateProviderFeatures(controller);
       if (!controllers.has(controller)) {
         throw new Error(`${controller.name} must have a @Controller decorator.`);
       }
@@ -63,7 +83,7 @@ export class Container {
       }
     }
     this.building.add(type);
-    for (const imported of metadata.imports ?? []) ref.imports.push(this.addModule(imported));
+    for (const imported of imports) ref.imports.push(this.addModule(imported));
     this.building.delete(type);
     this.refs.set(type, ref);
     return ref;
@@ -103,7 +123,7 @@ export class Container {
   }
 
   private resolveConstructorArguments(type: Type, ref: ModuleRef): unknown[] {
-    const dependencies = injections.get(type) ?? new Map<number, Type>();
+    const dependencies = constructorDependencies(type);
     const decoratedParameterCount = Math.max(
       0,
       ...[...dependencies.keys()].map((index) => index + 1),
@@ -117,6 +137,11 @@ export class Container {
         }
         return undefined;
       }
+      if (!isClassToken(dependency)) {
+        throw new Error(
+          "Non-class injection tokens and forwardRef runtime support require phase 2.",
+        );
+      }
       if (!injectable.has(dependency)) {
         throw new Error(
           `Cannot resolve constructor parameter ${index} of ${type.name}; use an @Injectable class.`,
@@ -124,5 +149,21 @@ export class Container {
       }
       return this.resolve(dependency, ref);
     });
+  }
+
+  private validateProviderFeatures(type: Type): void {
+    const options = providerOptions.get(type);
+    if ((options?.scope !== undefined && options.scope !== Scope.DEFAULT) || options?.durable) {
+      throw new Error("Non-default provider scopes require phase 6.");
+    }
+    let target: object | null = type.prototype;
+    while (target && target !== Object.prototype) {
+      if (propertyInjections.has(target) || optionalProperties.has(target)) {
+        throw new Error("Property injection and @Optional runtime support require phase 2.");
+      }
+      target = Object.getPrototypeOf(target);
+    }
+    if (optionalInjections.has(type))
+      throw new Error("@Optional runtime support requires phase 2.");
   }
 }

@@ -31,7 +31,10 @@ const boundaries = defineRule({
             (layer === "core" && source.startsWith("@mini-nest/common/internal/")) ||
             (layer === "platform-node" && builtins.has(source.replace(/^node:/, "")));
         if (layer === "common" && !isRelative) allowed = false;
-      } else if (source.includes("/internal/")) {
+      } else if (
+        source.includes("/internal/") &&
+        !path.relative(root, filename).replaceAll("\\", "/").startsWith("tests/")
+      ) {
         allowed = false;
       }
       if (isDi && isRelative) {

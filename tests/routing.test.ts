@@ -1,9 +1,31 @@
 import { it } from "vite-plus/test";
 import assert from "node:assert/strict";
-import { Controller, Get, Param } from "@mini-nest/common";
+import { All, Controller, Get, Param } from "@mini-nest/common";
 import { Application } from "@mini-nest/core";
 
 const request = (path: string) => new Request(`http://localhost${path}`);
+
+it("expands controller and method path arrays and handles @All", async () => {
+  @Controller(["a", "b"])
+  class MultiController {
+    @All(["one", "two"])
+    handler(@Param() params: object) {
+      return params;
+    }
+  }
+  const app = new Application().register(new MultiController());
+  for (const prefix of ["a", "b"]) {
+    for (const path of ["one", "two"]) {
+      for (const method of ["GET", "PUT", "DELETE"]) {
+        const response = await app.fetch(
+          new Request(`http://localhost/${prefix}/${path}`, { method }),
+        );
+        assert.equal(response.status, 200);
+        assert.deepEqual(await response.json(), {});
+      }
+    }
+  }
+});
 
 it("discovers inherited routes and parameter decorators without invoking getters", async () => {
   class BaseController {
