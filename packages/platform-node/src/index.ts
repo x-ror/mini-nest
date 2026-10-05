@@ -8,20 +8,6 @@ export { NativeResponse } from "@shared";
 
 export type { NativeAdapterOptions, NativeRequest } from "@shared";
 
-async function* responseChunks(body: ReadableStream<Uint8Array>) {
-  const reader = body.getReader();
-  try {
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) return;
-      yield value;
-    }
-  } finally {
-    await reader.cancel();
-    reader.releaseLock();
-  }
-}
-
 export class NodeHttpAdapter extends NativeHttpAdapter<Server> {
   private forceCloseConnections = false;
 
@@ -69,7 +55,10 @@ export class NodeHttpAdapter extends NativeHttpAdapter<Server> {
           outgoing.end();
           return;
         }
-        await pipeline(Readable.from(responseChunks(response.body)), outgoing);
+        await pipeline(
+          Readable.fromWeb(response.body as import("node:stream/web").ReadableStream<Uint8Array>),
+          outgoing,
+        );
       })().catch((error: unknown) => {
         console.error("Node HTTP transport failed", error);
         if (outgoing.headersSent) {
