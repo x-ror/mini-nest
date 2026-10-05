@@ -189,10 +189,11 @@ response events and manual `write()` calls are not.
 The benchmark exercises the same real Nest fixture over loopback for a native
 adapter and the Nest/Express reference. It supports a JSON GET, a parameterized
 route with repeated query fields, a JSON POST, or a round-robin mix of all
-three. The benchmark server runs in a separate child process from the load
-generator to avoid making the server share the client's event loop. It includes
-Nest's routing, DI, and fixture middleware, but does not model remote clients,
-uploads, static-file workloads, SSE, or reverse-proxy overhead:
+three. The benchmark server runs separately from multiple load-generator processes.
+Clients use persistent HTTP connections and synchronize measurement start after
+warmup to reduce client event-loop contention and process-start skew. It
+includes Nest's routing, DI, and fixture middleware, but does not model remote
+clients, uploads, static-file workloads, SSE, or reverse-proxy overhead:
 
 ```sh
 pnpm bench          # NodeHttpAdapter on Node
@@ -201,8 +202,9 @@ pnpm bench:bun      # BunHttpAdapter on Bun
 ```
 
 The defaults are three runs, each with 2 seconds of warmup, 10 seconds of
-measurement, and 32 concurrent clients. Configure with `BENCH_RUNS`,
-`BENCH_WARMUP_MS`, `BENCH_DURATION_MS`, and `BENCH_CONCURRENCY`. Select
+measurement, and 32 total concurrent clients split across four client
+processes. Configure with `BENCH_RUNS`, `BENCH_WARMUP_MS`, `BENCH_DURATION_MS`,
+`BENCH_CONCURRENCY`, and `BENCH_CLIENT_PROCESSES`. Select
 `BENCH_WORKLOAD=json|route|post|mixed`; default is `json`. Output includes each
 run's request rate, failures, mean latency, and approximate percentile upper
 bounds from a logarithmic histogram, plus mean throughput and standard

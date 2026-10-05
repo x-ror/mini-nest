@@ -1,6 +1,7 @@
 import "reflect-metadata";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
+import { Agent, request as httpRequest } from "node:http";
 import { performance } from "node:perf_hooks";
 import { createInterface } from "node:readline";
 import { NestFactory, type AbstractHttpAdapter } from "@nestjs/core";
@@ -12,19 +13,22 @@ import { FixtureModule } from "./fixture.js";
 const bunVersion = process.versions.bun;
 const mode = process.argv[2] ?? (bunVersion === undefined ? "node" : "bun");
 const serverMode = process.argv[3] === "--server";
+const clientMode = process.argv[3] === "--client";
 const durationMs = Number(process.env.BENCH_DURATION_MS ?? 10_000);
 const warmupMs = Number(process.env.BENCH_WARMUP_MS ?? 2_000);
 const concurrency = Number(process.env.BENCH_CONCURRENCY ?? 32);
+const clientProcesses = Number(process.env.BENCH_CLIENT_PROCESSES ?? 4);
 const runsCount = Number(process.env.BENCH_RUNS ?? 3);
 const workload = process.env.BENCH_WORKLOAD ?? "json";
 if (!["node", "bun", "express"].includes(mode)) {
   throw new Error("Usage: benchmark.js [node|bun|express]");
 }
 if (
-  ![durationMs, warmupMs, concurrency, runsCount].every(Number.isSafeInteger) ||
+  ![durationMs, warmupMs, concurrency, clientProcesses, runsCount].every(Number.isSafeInteger) ||
   durationMs <= 0 ||
   warmupMs < 0 ||
   concurrency <= 0 ||
+  clientProcesses <= 0 ||
   runsCount <= 0
 ) {
   throw new Error(
@@ -67,6 +71,10 @@ interface RunResult {
   p99UpperBoundMs: number;
   elapsedSeconds: number;
 }
+interface ClientResult extends RunResult {
+  buckets: number[];
+  totalLatencyUs: number;
+}
 
 function recordLatency(buckets: Uint32Array, milliseconds: number): number {
   const microseconds = Math.max(1, Math.ceil(milliseconds * 1000));
@@ -89,17 +97,33 @@ async function worker(
   baseUrl: string,
   until: number,
   measure: boolean,
+  agent: Agent,
   state: { buckets: Uint32Array; requests: number; failures: number; totalLatencyUs: number },
 ): Promise<void> {
   while (performance.now() < until) {
     const start = performance.now();
     try {
       const work = selectedWorkloads[workloadSequence++ % selectedWorkloads.length]!;
-      const response = await fetch(`${baseUrl}${work.path}`, work.init);
-      await response.arrayBuffer();
+      const status = await new Promise<number>((resolve, reject) => {
+        const request = httpRequest(
+          new URL(work.path, baseUrl),
+          {
+            method: work.init?.method ?? "GET",
+            headers: work.init?.headers as Record<string, string> | undefined,
+            agent,
+          },
+          (response) => {
+            response.once("error", reject);
+            response.once("end", () => resolve(response.statusCode ?? 0));
+            response.resume();
+          },
+        );
+        request.once("error", reject);
+        request.end(work.init?.body);
+      });
       if (measure) {
         state.requests++;
-        if (response.status !== work.expectedStatus) state.failures++;
+        if (status !== work.expectedStatus) state.failures++;
         state.totalLatencyUs += recordLatency(state.buckets, performance.now() - start);
       }
     } catch {
@@ -109,6 +133,53 @@ async function worker(
         state.totalLatencyUs += recordLatency(state.buckets, performance.now() - start);
       }
     }
+  }
+}
+
+async function runClient(
+  baseUrl: string,
+  clientConcurrency: number,
+  onReady: () => void,
+  waitForStart: () => Promise<void>,
+): Promise<ClientResult> {
+  const agent = new Agent({ keepAlive: true, maxSockets: clientConcurrency });
+  try {
+    const warmupState = {
+      buckets: new Uint32Array(32),
+      requests: 0,
+      failures: 0,
+      totalLatencyUs: 0,
+    };
+    await Promise.all(
+      Array.from({ length: clientConcurrency }, () =>
+        worker(baseUrl, performance.now() + warmupMs, false, agent, warmupState),
+      ),
+    );
+    onReady();
+    await waitForStart();
+    const state = { ...warmupState, buckets: new Uint32Array(32), requests: 0, failures: 0 };
+    const started = performance.now();
+    const deadline = started + durationMs;
+    await Promise.all(
+      Array.from({ length: clientConcurrency }, () =>
+        worker(baseUrl, deadline, true, agent, state),
+      ),
+    );
+    const elapsedSeconds = (performance.now() - started) / 1000;
+    return {
+      requests: state.requests,
+      failures: state.failures,
+      requestsPerSecond: state.requests / elapsedSeconds,
+      meanLatencyMs: Number((state.totalLatencyUs / Math.max(state.requests, 1) / 1000).toFixed(3)),
+      p50UpperBoundMs: percentile(state.buckets, state.requests, 0.5),
+      p95UpperBoundMs: percentile(state.buckets, state.requests, 0.95),
+      p99UpperBoundMs: percentile(state.buckets, state.requests, 0.99),
+      elapsedSeconds,
+      buckets: Array.from(state.buckets),
+      totalLatencyUs: state.totalLatencyUs,
+    };
+  } finally {
+    agent.destroy();
   }
 }
 
@@ -190,40 +261,106 @@ async function startServerProcess(): Promise<{ baseUrl: string; stop: () => Prom
 
 if (serverMode) {
   await runServer();
+} else if (clientMode) {
+  const baseUrl = process.env.BENCH_BASE_URL;
+  const clientConcurrency = Number(process.env.BENCH_CLIENT_CONCURRENCY);
+  if (!baseUrl || !Number.isSafeInteger(clientConcurrency) || clientConcurrency <= 0) {
+    throw new Error("Benchmark client process requires a base URL and positive concurrency.");
+  }
+  const startSignal = createInterface({ input: process.stdin });
+  const startMessage = once(startSignal, "line");
+  const waitForStart = async (): Promise<void> => {
+    await startMessage;
+    startSignal.close();
+  };
+  const result = await runClient(
+    baseUrl,
+    clientConcurrency,
+    () => console.log("BENCH_CLIENT_READY"),
+    waitForStart,
+  );
+  console.log(`BENCH_CLIENT_RESULT ${JSON.stringify(result)}`);
 } else {
   const server = await startServerProcess();
   try {
     const baseUrl = server.baseUrl;
     const results: RunResult[] = [];
     for (let run = 0; run < runsCount; run++) {
-      const warmupState = {
-        buckets: new Uint32Array(32),
-        requests: 0,
-        failures: 0,
-        totalLatencyUs: 0,
-      };
-      await Promise.all(
-        Array.from({ length: concurrency }, () =>
-          worker(baseUrl, performance.now() + warmupMs, false, warmupState),
-        ),
+      const clients = Array.from({ length: clientProcesses }, (_, index) => {
+        const clientConcurrency =
+          Math.floor(concurrency / clientProcesses) +
+          (index < concurrency % clientProcesses ? 1 : 0);
+        if (clientConcurrency === 0) return null;
+        const child = spawn(process.execPath, [process.argv[1]!, mode, "--client"], {
+          stdio: ["pipe", "pipe", "inherit"],
+          env: {
+            ...process.env,
+            BENCH_BASE_URL: baseUrl,
+            BENCH_CLIENT_CONCURRENCY: String(clientConcurrency),
+          },
+        });
+        const lines = createInterface({ input: child.stdout });
+        let resolveReady!: () => void;
+        let rejectReady!: (error: Error) => void;
+        const ready = new Promise<void>((resolve, reject) => {
+          resolveReady = resolve;
+          rejectReady = reject;
+        });
+        const result = new Promise<ClientResult>((resolve, reject) => {
+          let result: ClientResult | undefined;
+          lines.on("line", (line) => {
+            const prefix = "BENCH_CLIENT_RESULT ";
+            if (line.startsWith(prefix)) {
+              result = JSON.parse(line.slice(prefix.length)) as ClientResult;
+            } else if (line === "BENCH_CLIENT_READY") {
+              resolveReady();
+            } else {
+              console.log(line);
+            }
+          });
+          child.once("error", (error) => {
+            rejectReady(error);
+            reject(error);
+          });
+          child.once("exit", (code) => {
+            lines.close();
+            rejectReady(new Error(`Benchmark client exited before ready (code ${code}).`));
+            if (code !== 0 || !result) {
+              reject(new Error(`Benchmark client exited without results (code ${code}).`));
+              return;
+            }
+            resolve(result);
+          });
+        });
+        return { child, ready, result };
+      });
+      const activeClients = clients.filter((client) => client !== null);
+      await Promise.all(activeClients.map((client) => client.ready));
+      for (const client of activeClients) client.child.stdin.end("START\n");
+      const clientResults = await Promise.all(activeClients.map((client) => client.result));
+      const buckets = new Uint32Array(32);
+      const requests = clientResults.reduce((total, result) => total + result.requests, 0);
+      for (const result of clientResults) {
+        result.buckets.forEach((count, index) => {
+          buckets[index] = (buckets[index] ?? 0) + count;
+        });
+      }
+      const totalLatencyUs = clientResults.reduce(
+        (total, result) => total + result.totalLatencyUs,
+        0,
       );
-      const state = { ...warmupState, buckets: new Uint32Array(32), requests: 0, failures: 0 };
-      const started = performance.now();
-      const deadline = started + durationMs;
-      await Promise.all(
-        Array.from({ length: concurrency }, () => worker(baseUrl, deadline, true, state)),
+      const elapsedSeconds = Math.max(
+        ...clientResults.map((result) => result.elapsedSeconds),
+        Number.EPSILON,
       );
-      const elapsedSeconds = (performance.now() - started) / 1000;
       results.push({
-        requests: state.requests,
-        failures: state.failures,
-        requestsPerSecond: Math.round(state.requests / elapsedSeconds),
-        meanLatencyMs: Number(
-          (state.totalLatencyUs / Math.max(state.requests, 1) / 1000).toFixed(3),
-        ),
-        p50UpperBoundMs: Number(percentile(state.buckets, state.requests, 0.5).toFixed(3)),
-        p95UpperBoundMs: Number(percentile(state.buckets, state.requests, 0.95).toFixed(3)),
-        p99UpperBoundMs: Number(percentile(state.buckets, state.requests, 0.99).toFixed(3)),
+        requests,
+        failures: clientResults.reduce((total, result) => total + result.failures, 0),
+        requestsPerSecond: Math.round(requests / elapsedSeconds),
+        meanLatencyMs: Number((totalLatencyUs / Math.max(requests, 1) / 1000).toFixed(3)),
+        p50UpperBoundMs: Number(percentile(buckets, requests, 0.5).toFixed(3)),
+        p95UpperBoundMs: Number(percentile(buckets, requests, 0.95).toFixed(3)),
+        p99UpperBoundMs: Number(percentile(buckets, requests, 0.99).toFixed(3)),
         elapsedSeconds: Number(elapsedSeconds.toFixed(3)),
       });
     }
@@ -239,6 +376,7 @@ if (serverMode) {
           workload,
           runtime: bunVersion === undefined ? `Node ${process.version}` : `Bun ${bunVersion}`,
           concurrency,
+          clientProcesses,
           warmupMs,
           durationMs,
           runs: results,
