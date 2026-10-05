@@ -121,13 +121,51 @@ If using the `1m` proxy limit, configure the adapter with
 application-side HTTP connection, not the original client connection. Do not
 use forwarded headers for security decisions unless a trusted-proxy policy is
 implemented by your application. These adapters do not support WebSocket
-upgrades or SSE/direct response writes, even when the proxy can proxy them.
+upgrades or arbitrary direct response writes, even when the proxy can proxy
+them.
 
 The Node adapter exposes its real HTTP server through `getHttpServer()`.
 The Bun adapter exposes a small event/address facade for Nest's listen lifecycle,
 with the actual Bun server at `.native`; it is not a Node server or a WebSocket
 adapter. Fetch response streaming is supported for files, but arbitrary Node
 response events and manual `write()` calls are not.
+
+### Operational notes
+
+- Multipart uploads are parsed into in-memory native `File` values and are
+  subject to `bodyLimit`; the adapter does not spool uploaded files to disk.
+- Static files are read into memory for each request. Restrict the configured
+  root to trusted public assets; use a dedicated static server or CDN for large
+  files or high-volume delivery.
+- For SSE behind Nginx, keep response buffering disabled for the SSE location
+  and set `proxy_read_timeout` to match the expected idle interval. The adapter
+  sends `X-Accel-Buffering: no`, but proxy configuration controls end-to-end
+  behavior.
+- `shutdownTimeout` defaults to 5000 ms. When it expires, outstanding Node
+  connections or Bun requests may be forcibly closed; choose a timeout long
+  enough for in-flight requests and SSE shutdown.
+
+### Benchmarks
+
+The benchmark exercises the same real Nest fixture and `/api` JSON endpoint
+over loopback for a native adapter and the Nest/Express reference. It includes
+Nest's routing, DI, and fixture middleware, but does not model remote clients,
+uploads, static-file workloads, SSE, or reverse-proxy overhead:
+
+```sh
+pnpm bench          # NodeHttpAdapter on Node
+pnpm bench:express  # Nest/Express on Node
+pnpm bench:bun      # BunHttpAdapter on Bun
+```
+
+The default run uses 2 seconds of warmup, 10 seconds of measurement, and 32
+concurrent clients. Override these with `BENCH_WARMUP_MS`,
+`BENCH_DURATION_MS`, and `BENCH_CONCURRENCY`. Output includes request rate,
+failures, mean latency, and approximate latency percentile upper bounds from a
+logarithmic histogram. Run each command on an otherwise idle machine, repeat
+runs, and compare like runtimes and environments. This harness is a reproducible
+local baseline, not a production load test or evidence of a performance
+advantage.
 
 ## Development
 
@@ -136,6 +174,7 @@ pnpm install
 pnpm run check
 pnpm run test
 pnpm run test:bun
+pnpm bench
 pnpm run dev
 ```
 
@@ -148,8 +187,8 @@ TypeScript 7 is retained. No ESLint, Babel, or tsc-watch.
 
 Conformance checks execute the same real Nest module on each native adapter and
 Nest/Express. This is a compatibility baseline, not full framework conformance
-or evidence of a performance advantage. Benchmarks and production hardening
-remain future work. The former alternative-core prototype is retained only in
-Git history; its phases no longer describe this project's roadmap.
+or evidence of a performance advantage. The former alternative-core prototype
+is retained only in Git history; its phases no longer describe this project's
+roadmap.
 
 Repository: <https://github.com/x-ror/nest-native-adapters>

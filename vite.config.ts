@@ -51,7 +51,11 @@ export default defineConfig({
     },
     {
       name: "conformance",
-      entry: { smoke: "packages/conformance/src/smoke.ts", bun: "packages/conformance/src/bun.ts" },
+      entry: {
+        smoke: "packages/conformance/src/smoke.ts",
+        bun: "packages/conformance/src/bun.ts",
+        benchmark: "packages/conformance/src/benchmark.ts",
+      },
       outDir: "packages/conformance/dist",
       tsconfig: "packages/conformance/tsconfig.json",
       platform: "node",

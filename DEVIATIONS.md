@@ -42,6 +42,6 @@ history, not active workspace packages.
 
 ### Phase 3: production readiness
 
-- benchmark the adapters on representative workloads under real traffic
-- document operational caveats for proxying, TLS termination, and body-size limits
+- [x] add a reproducible local benchmark harness against Nest/Express
+- [x] document operational caveats for proxying, TLS termination, streaming, uploads, and body-size limits
 - ship a clear compatibility matrix and migration notes for Express/Fastify users

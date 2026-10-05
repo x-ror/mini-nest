@@ -14,7 +14,10 @@
     "start": "node dist/server.js",
     "test": "vp test run && vp run test:conformance",
     "test:conformance": "vp pack && node packages/conformance/dist/smoke.js",
-    "test:bun": "vp pack && bun packages/conformance/dist/bun.js"
+    "test:bun": "vp pack && bun packages/conformance/dist/bun.js",
+    "bench": "vp pack && node packages/conformance/dist/benchmark.js node",
+    "bench:express": "vp pack && node packages/conformance/dist/benchmark.js express",
+    "bench:bun": "vp pack && bun packages/conformance/dist/benchmark.js bun"
   },
   "devDependencies": {
     "@nestjs/common": "catalog:",
