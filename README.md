@@ -17,6 +17,20 @@ Run `pnpm run build` before packing or publishing either adapter; only `dist/` i
 NestJS **12.1.2**, Node.js 22+, current Bun. Other Nest versions are not yet verified.
 Neither adapter uses Express or Fastify. Express is a test-only reference.
 
+## Compatibility matrix
+
+| Capability                                           | Node adapter  | Bun adapter   | Notes                                                           |
+| ---------------------------------------------------- | ------------- | ------------- | --------------------------------------------------------------- |
+| Nest baseline                                        | Verified      | Verified      | NestJS 12.1.2; other versions are unverified                    |
+| Runtime                                              | Node.js 22+   | Current Bun   | Bun uses `Bun.serve`                                            |
+| Routing, middleware, guards, pipes, interceptors, DI | Supported     | Supported     | Shared adapter implementation                                   |
+| JSON and nested URL-encoded bodies                   | Supported     | Supported     | Parsed body limit defaults to 100 KiB                           |
+| Multipart forms                                      | Supported     | Supported     | Files are native `File` values on `@Body()`                     |
+| CORS and static assets                               | Basic support | Basic support | Not a replacement for dedicated integrations/CDNs               |
+| Nest `@Sse()`                                        | Supported     | Supported     | Observable `MessageEvent` stream; not arbitrary response writes |
+| TLS / HTTPS                                          | Not supported | Not supported | Terminate TLS at a reverse proxy                                |
+| WebSockets, Multer decorators, MVC                   | Not supported | Not supported | Use a different Nest platform adapter if required               |
+
 ## Usage
 
 ```ts
@@ -61,6 +75,31 @@ streaming response API. Basic static file serving and CORS are supported through
 the adapter middleware API with origin/preflight handling. Unsupported adapter
 configuration throws instead of silently doing nothing. Do not assume browser
 cross-origin access is enabled.
+
+### Migrating from Express or Fastify
+
+The controllers and Nest providers can generally stay unchanged, but audit all
+transport-specific code before replacing the platform adapter:
+
+- Change adapter construction to `new NodeHttpAdapter()` or
+  `new BunHttpAdapter()`. Do not install Express/Fastify platform plugins.
+- Treat `@Req()` as `NativeRequest`; its `.raw` is a Web `Request`, not an
+  Express `Request`, Fastify request, or Node `IncomingMessage`.
+- Treat `@Res()` as `NativeResponse`. `res.status(...).json(...)` and
+  `res.setHeader(...)` are available, but Express/Fastify APIs, direct Node
+  writes, response events, and plugin-specific methods are not.
+- Replace Multer `@UploadedFile()` / `@UploadedFiles()` flows with
+  `@Body()` multipart fields, where uploaded files are Web `File` objects.
+  Uploads are memory-backed and bounded by `bodyLimit`.
+- Register static assets and CORS through the adapter API and test any
+  framework-specific options; these implementations intentionally provide a
+  smaller feature set than the corresponding Express/Fastify integrations.
+- Terminate HTTPS at a reverse proxy and do not trust forwarded headers unless
+  the application implements a trusted-proxy policy.
+
+If the application depends on WebSockets, Multer decorators, Fastify plugins,
+Express middleware, direct response writes, or Nest MVC, retain the existing
+platform adapter for that application.
 
 Example SSE endpoint:
 

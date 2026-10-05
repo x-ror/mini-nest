@@ -44,4 +44,4 @@ history, not active workspace packages.
 
 - [x] add a reproducible local benchmark harness against Nest/Express
 - [x] document operational caveats for proxying, TLS termination, streaming, uploads, and body-size limits
-- ship a clear compatibility matrix and migration notes for Express/Fastify users
+- [x] document the compatibility matrix and migration notes for Express/Fastify users
