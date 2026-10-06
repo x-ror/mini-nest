@@ -1,11 +1,13 @@
 import "reflect-metadata";
-import { mkdir, rm, writeFile } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { get as httpsGet } from "node:https";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 import { NestFactory } from "@nestjs/core";
-import { VersioningType, type INestApplication } from "@nestjs/common";
+import { VersioningType, type INestApplication, type VersioningOptions } from "@nestjs/common";
 import { ExpressAdapter } from "@nestjs/platform-express";
-import { NodeHttpAdapter, NativeResponse } from "nestjs-adapter-node";
+import { NodeHttpAdapter, NativeResponse, type NativeRequest } from "nestjs-adapter-node";
 import { BunHttpAdapter } from "nestjs-adapter-bun";
 import { compareAdapters, startFixture } from "../packages/conformance/src/compare.js";
 import { FixtureModule, GreetingService } from "../packages/conformance/src/fixture.js";
@@ -154,10 +156,6 @@ describe("native Nest adapters", () => {
     });
     expect(() => adapter.useBodyParser()).toThrow("Custom body parsers");
     expect(() => adapter.render()).toThrow("MVC");
-    expect(() =>
-      adapter.applyVersionFilter(() => {}, "1", { type: VersioningType.HEADER, header: "version" }),
-    ).toThrow("URI");
-    expect(() => adapter.initHttpServer({ httpsOptions: {} })).toThrow("HTTPS");
     expect(() => new BunHttpAdapter().initHttpServer({})).toThrow("Bun runtime");
     expect(() => new NodeHttpAdapter({ bodyLimit: -1 })).toThrow("bodyLimit");
     expect(() => new NodeHttpAdapter({ shutdownTimeout: -1 })).toThrow("shutdownTimeout");
@@ -241,5 +239,84 @@ describe("native Nest adapters", () => {
     const result = await fetch(`${await app.getUrl()}/api`, { signal: AbortSignal.timeout(2000) });
     expect(result.status).toBe(500);
     expect(result.headers.get("x-bad")).toBeNull();
+  });
+  it("selects handlers by header, media type and custom versioning", async () => {
+    const cases: { options: VersioningOptions; send: Record<string, string>; search: string }[] = [
+      {
+        options: { type: VersioningType.HEADER, header: "X-Api-Version" },
+        send: { "x-api-version": "3" },
+        search: "",
+      },
+      {
+        options: { type: VersioningType.MEDIA_TYPE, key: "v=" },
+        send: { accept: "application/json;v=2" },
+        search: "",
+      },
+      {
+        options: {
+          type: VersioningType.CUSTOM,
+          extractor: (req: unknown) => (req as NativeRequest).query.v as string,
+        },
+        send: {},
+        search: "?v=2",
+      },
+    ];
+    for (const { options, send, search } of cases) {
+      const app = await NestFactory.create(FixtureModule, new NodeHttpAdapter(), { logger: false });
+      apps.push(app);
+      app.enableVersioning(options);
+      await app.listen(0, "127.0.0.1");
+      const url = `${await app.getUrl()}/api/header-versioned`;
+      expect(await (await fetch(url + search, { headers: send })).json()).toEqual({
+        handler: "new",
+      });
+      // Unknown or missing versions fall through to the VERSION_NEUTRAL handler.
+      const other = await fetch(url + (search && "?v=9"), {
+        headers: { "x-api-version": "9", accept: "application/json;v=9" },
+      });
+      expect(await other.json()).toEqual({ handler: "default" });
+      expect(await (await fetch(url)).json()).toEqual({ handler: "default" });
+    }
+  });
+  it("serves HTTPS when Nest httpsOptions are given", async () => {
+    const dir = join(process.cwd(), ".tmp-tls");
+    await mkdir(dir, { recursive: true });
+    try {
+      execFileSync(
+        "openssl",
+        [
+          "req",
+          "-x509",
+          "-newkey",
+          "rsa:2048",
+          "-nodes",
+          "-days",
+          "1",
+          "-subj",
+          "/CN=localhost",
+        ].concat(["-keyout", join(dir, "key.pem"), "-out", join(dir, "cert.pem")]),
+        { stdio: "ignore" },
+      );
+      const app = await NestFactory.create(FixtureModule, new NodeHttpAdapter(), {
+        logger: false,
+        httpsOptions: {
+          key: await readFile(join(dir, "key.pem")),
+          cert: await readFile(join(dir, "cert.pem")),
+        },
+      });
+      apps.push(app);
+      app.use((req: NativeRequest, res: NativeResponse) => res.json({ protocol: req.protocol }));
+      await app.listen(0, "127.0.0.1");
+      const { port } = app.getHttpServer().address() as { port: number };
+      const body = await new Promise<string>((resolve, reject) => {
+        httpsGet({ host: "127.0.0.1", port, path: "/", rejectUnauthorized: false }, (res) => {
+          let text = "";
+          res.on("data", (chunk) => (text += chunk)).on("end", () => resolve(text));
+        }).on("error", reject);
+      });
+      expect(JSON.parse(body)).toEqual({ protocol: "https" });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });

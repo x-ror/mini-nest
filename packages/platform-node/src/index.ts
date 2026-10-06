@@ -1,5 +1,7 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { createServer as createSecureServer } from "node:https";
 import { PassThrough, Readable, pipeline } from "node:stream";
+import type { TLSSocket } from "node:tls";
 import { PayloadTooLargeException, type NestApplicationOptions } from "@nestjs/common";
 import {
   NativeHttpAdapter,
@@ -54,7 +56,7 @@ class NodeRequest implements NativeRequest {
     return (this.incoming.headers.host ?? "localhost").replace(/:\d*$/, "");
   }
   get protocol(): string {
-    return "http";
+    return (this.incoming.socket as TLSSocket).encrypted ? "https" : "http";
   }
   get ip(): string | undefined {
     return this.incoming.socket.remoteAddress;
@@ -100,7 +102,7 @@ class NodeRequest implements NativeRequest {
       init.duplex = "half";
     }
     return (this.webRequest = new Request(
-      new URL(this.originalUrl, `http://${incoming.headers.host ?? "localhost"}`),
+      new URL(this.originalUrl, `${this.protocol}://${incoming.headers.host ?? "localhost"}`),
       init,
     ));
   }
@@ -140,10 +142,13 @@ export class NodeHttpAdapter extends NativeHttpAdapter<Server> {
   initHttpServer(options: NestApplicationOptions): void {
     this.validateApplicationOptions(options);
     this.forceCloseConnections = options.forceCloseConnections ?? false;
-    this.httpServer = createServer((incoming, outgoing) => {
+    const listener = (incoming: IncomingMessage, outgoing: ServerResponse): void => {
       const request = new NodeRequest(incoming, outgoing);
       this.dispatch(request, new NodeResponse(request.method, outgoing));
-    });
+    };
+    this.httpServer = options.httpsOptions
+      ? createSecureServer(options.httpsOptions, listener)
+      : createServer(listener);
   }
 
   protected override readBody(

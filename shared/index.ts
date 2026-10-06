@@ -5,6 +5,8 @@ import { LegacyRouteConverter } from "@nestjs/core/internal";
 import {
   HttpException,
   RequestMethod,
+  VERSION_NEUTRAL,
+  VersioningType,
   type NestApplicationOptions,
   type VersioningOptions,
 } from "@nestjs/common";
@@ -26,6 +28,7 @@ export interface NativeAdapterOptions {
   bodyLimit?: number;
   shutdownTimeout?: number;
 }
+type VersionValue = Parameters<AbstractHttpAdapter["applyVersionFilter"]>[1];
 type ErrorHandler = (
   error: unknown,
   req: NativeRequest,
@@ -346,14 +349,49 @@ export abstract class NativeHttpAdapter<TServer> extends AbstractHttpAdapter<
   render(): never {
     throw new Error("MVC rendering is not supported by native adapters.");
   }
-  applyVersionFilter(_handler: Function, _version: unknown, _options: VersioningOptions): never {
-    throw new Error("Only URI versioning is currently supported.");
+  applyVersionFilter(
+    handler: Function,
+    version: VersionValue,
+    options: VersioningOptions,
+  ): (req: NativeRequest, res: NativeResponse, next: () => void) => Function {
+    const run = handler as ReturnType<typeof this.applyVersionFilter>;
+    if (version === VERSION_NEUTRAL || options.type === VersioningType.URI) return run;
+    const wanted = Array.isArray(version) ? version : [version];
+    let extract: (request: NativeRequest) => string | string[] | undefined;
+    if (options.type === VersioningType.CUSTOM) {
+      extract = (request) => options.extractor(request);
+    } else if (options.type === VersioningType.HEADER) {
+      const header = options.header.toLowerCase();
+      extract = (request) => request.headers[header];
+    } else if (options.type === VersioningType.MEDIA_TYPE) {
+      const key = options.key;
+      extract = (request) => {
+        for (const range of (request.headers.accept ?? "").split(",")) {
+          for (const parameter of range.split(";").slice(1)) {
+            const trimmed = parameter.trim();
+            if (trimmed.startsWith(key)) return trimmed.slice(key.length);
+          }
+        }
+        return undefined;
+      };
+    } else {
+      throw new Error("Unsupported versioning options");
+    }
+    // Like Nest's Express adapter, each handler is checked on its own, so the
+    // highest version across separate handlers is not selected automatically.
+    return (request, response, next) => {
+      const found = extract(request);
+      const matches =
+        found === undefined
+          ? wanted.includes(VERSION_NEUTRAL)
+          : ([] as string[]).concat(found).some((candidate) => wanted.includes(candidate));
+      return matches ? run(request, response, next) : (next() as unknown as Function);
+    };
   }
   beforeClose(): void {
     this.shuttingDown = true;
   }
   protected validateApplicationOptions(options: NestApplicationOptions): void {
-    if (options.httpsOptions) throw new Error("HTTPS is not implemented by native adapters yet.");
     this.return503OnClosing = options.return503OnClosing ?? false;
   }
 }

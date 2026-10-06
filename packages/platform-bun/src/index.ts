@@ -28,10 +28,12 @@ export class BunServerFacade extends EventEmitter {
 
 export class BunHttpAdapter extends NativeHttpAdapter<BunServerFacade> {
   private forceCloseConnections = false;
+  private tls?: NestApplicationOptions["httpsOptions"];
   initHttpServer(options: NestApplicationOptions): void {
     if (typeof Bun === "undefined") throw new Error("BunHttpAdapter requires the Bun runtime.");
     this.validateApplicationOptions(options);
     this.forceCloseConnections = options.forceCloseConnections ?? false;
+    this.tls = options.httpsOptions;
     this.httpServer = new BunServerFacade();
   }
   listen(port: string | number, callback?: () => void): BunServerFacade;
@@ -51,6 +53,8 @@ export class BunHttpAdapter extends NativeHttpAdapter<BunServerFacade> {
       this.httpServer.native = Bun.serve({
         port: numericPort,
         hostname: typeof hostnameOrCallback === "string" ? hostnameOrCallback : "0.0.0.0",
+        // Bun reads key, cert, ca and passphrase; other Node TLS options are ignored.
+        tls: this.tls as Bun.TLSOptions | undefined,
         fetch: (request, server) => this.fetch(request, { ip: server.requestIP(request)?.address }),
         error: (error) => {
           console.error("Bun HTTP transport failed", error);
