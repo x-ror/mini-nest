@@ -17,12 +17,14 @@
     "test:bun": "vp pack && bun packages/conformance/dist/bun.js",
     "bench": "vp pack && node packages/conformance/dist/benchmark.js node",
     "bench:express": "vp pack && node packages/conformance/dist/benchmark.js express",
+    "bench:fastify": "vp pack && node packages/conformance/dist/benchmark.js fastify",
     "bench:bun": "vp pack && bun packages/conformance/dist/benchmark.js bun"
   },
   "devDependencies": {
     "@nestjs/common": "catalog:",
     "@nestjs/core": "catalog:",
     "@nestjs/platform-express": "catalog:",
+    "@nestjs/platform-fastify": "catalog:",
     "@types/bun": "catalog:",
     "@types/node": "catalog:",
     "nestjs-adapter-bun": "workspace:*",

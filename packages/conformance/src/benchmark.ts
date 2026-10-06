@@ -6,6 +6,7 @@ import { performance } from "node:perf_hooks";
 import { createInterface } from "node:readline";
 import { NestFactory, type AbstractHttpAdapter } from "@nestjs/core";
 import { ExpressAdapter } from "@nestjs/platform-express";
+import { FastifyAdapter } from "@nestjs/platform-fastify";
 import { BunHttpAdapter } from "nestjs-adapter-bun";
 import { NodeHttpAdapter } from "nestjs-adapter-node";
 import { FixtureModule } from "./fixture.js";
@@ -20,8 +21,8 @@ const concurrency = Number(process.env.BENCH_CONCURRENCY ?? 32);
 const clientProcesses = Number(process.env.BENCH_CLIENT_PROCESSES ?? 4);
 const runsCount = Number(process.env.BENCH_RUNS ?? 3);
 const workload = process.env.BENCH_WORKLOAD ?? "json";
-if (!["node", "bun", "express"].includes(mode)) {
-  throw new Error("Usage: benchmark.js [node|bun|express]");
+if (!["node", "bun", "express", "fastify"].includes(mode)) {
+  throw new Error("Usage: benchmark.js [node|bun|express|fastify]");
 }
 if (
   ![durationMs, warmupMs, concurrency, clientProcesses, runsCount].every(Number.isSafeInteger) ||
@@ -187,9 +188,11 @@ async function runServer(): Promise<void> {
   const adapter: AbstractHttpAdapter =
     mode === "express"
       ? new ExpressAdapter()
-      : mode === "bun"
-        ? new BunHttpAdapter()
-        : new NodeHttpAdapter();
+      : mode === "fastify"
+        ? new FastifyAdapter()
+        : mode === "bun"
+          ? new BunHttpAdapter()
+          : new NodeHttpAdapter();
   const app = await NestFactory.create(FixtureModule, adapter, {
     logger: false,
     abortOnError: false,
