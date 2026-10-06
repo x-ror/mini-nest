@@ -210,4 +210,36 @@ describe("native Nest adapters", () => {
     const empty = new NativeResponse("GET").status(204).send("ignored");
     expect(await (await empty.done).text()).toBe("");
   });
+  it("parses query strings into prototype-free objects", async () => {
+    const adapter = new NodeHttpAdapter();
+    let query: unknown;
+    adapter.use((req: { query: unknown }, res: NativeResponse) => {
+      query = req.query;
+      res.end();
+    });
+    await adapter.fetch(
+      new Request("http://localhost/?a=1&a=2&b=x+y%21&flag&&bad=%E0%A4%A&__proto__=p&c=d=e"),
+    );
+    expect("toString" in (query as object)).toBe(false);
+    expect({ ...(query as object) }).toEqual({
+      a: ["1", "2"],
+      b: "x y!",
+      flag: "",
+      bad: "%E0%A4%A",
+      ["__proto__"]: "p",
+      c: "d=e",
+    });
+  });
+  it("answers 500 instead of hanging when a response header is invalid", async () => {
+    const app = await NestFactory.create(FixtureModule, new NodeHttpAdapter(), { logger: false });
+    apps.push(app);
+    app.use((_req: unknown, res: NativeResponse) => {
+      res.setHeader("x-bad", "a\r\nb: c");
+      res.json({ never: true });
+    });
+    await app.listen(0, "127.0.0.1");
+    const result = await fetch(`${await app.getUrl()}/api`, { signal: AbortSignal.timeout(2000) });
+    expect(result.status).toBe(500);
+    expect(result.headers.get("x-bad")).toBeNull();
+  });
 });

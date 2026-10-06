@@ -8,12 +8,20 @@ import {
   type NestApplicationOptions,
   type VersioningOptions,
 } from "@nestjs/common";
-import { NativeRouter, type Handler, type Next } from "./router.js";
-import { createRequest, parseRequestBody, type NativeRequest } from "./request.js";
+import { NativeRouter, type Fail, type Handler, type Next } from "./router.js";
+import {
+  createRequest,
+  isParsedMethod,
+  parseRequestBody,
+  readWebBody,
+  type NativeRequest,
+} from "./request.js";
 import { NativeResponse } from "./response.js";
 
 export { NativeResponse } from "./response.js";
+export { NullObject, parseQuery } from "./request.js";
 export type { NativeRequest } from "./request.js";
+export type { ResponseBody } from "./response.js";
 export interface NativeAdapterOptions {
   bodyLimit?: number;
   shutdownTimeout?: number;
@@ -91,32 +99,64 @@ export abstract class NativeHttpAdapter<TServer> extends AbstractHttpAdapter<
     }
     return this;
   }
-  readonly fetch = async (raw: Request, info?: { ip?: string }): Promise<Response> => {
+  readonly fetch = (raw: Request, info?: { ip?: string }): Promise<Response> => {
     const request = createRequest(raw, info?.ip);
     const response = new NativeResponse(request.method);
-    if (this.shuttingDown && this.return503OnClosing)
-      return new Response("Service Unavailable", { status: 503 });
-    const routing = this.router
-      .run(request, response, this.notFound)
-      .catch(async (error: unknown) => {
-        if (response.headersSent) {
-          console.error("Request failed after response was sent", error);
-        } else if (this.errorHandler) {
-          await this.errorHandler(error, request, response, () => {});
-        } else {
-          console.error("Unhandled native adapter error", error);
-          response
-            .status(error instanceof HttpException ? error.getStatus() : 500)
-            .json(
-              error instanceof HttpException
-                ? error.getResponse()
-                : { statusCode: 500, message: "Internal server error" },
-            );
-        }
-      });
-    await Promise.race([routing, response.done]);
+    this.dispatch(request, response);
     return response.done;
   };
+  /** Runs one request through the router; never throws. */
+  protected dispatch(request: NativeRequest, response: NativeResponse): void {
+    if (this.shuttingDown && this.return503OnClosing) {
+      response
+        .status(503)
+        .setHeader("content-type", "text/plain; charset=utf-8")
+        .end("Service Unavailable");
+      return;
+    }
+    this.router.run(request, response, this.notFound, this.fail);
+  }
+  private readonly fail: Fail = (error, request, response) => {
+    if (response.headersSent) {
+      console.error("Request failed after response was sent", error);
+      return;
+    }
+    try {
+      if (this.errorHandler) {
+        const handled = this.errorHandler(error, request, response, () => {});
+        if (typeof (handled as PromiseLike<unknown> | undefined)?.then === "function") {
+          (handled as PromiseLike<unknown>).then(undefined, (failure: unknown) =>
+            this.failSafe(failure, response),
+          );
+        }
+        return;
+      }
+      console.error("Unhandled native adapter error", error);
+      response
+        .status(error instanceof HttpException ? error.getStatus() : 500)
+        .json(
+          error instanceof HttpException
+            ? error.getResponse()
+            : { statusCode: 500, message: "Internal server error" },
+        );
+    } catch (failure) {
+      this.failSafe(failure, response);
+    }
+  };
+  private failSafe(error: unknown, response: NativeResponse): void {
+    console.error("Native adapter error handling failed", error);
+    if (response.headersSent) return;
+    try {
+      response.status(500).json({ statusCode: 500, message: "Internal server error" });
+    } catch (failure) {
+      console.error("Native adapter could not send an error response", failure);
+    }
+  }
+  /** Reads the request body, or returns null when the request has none. */
+  protected readBody(request: NativeRequest, limit: number): Promise<Buffer> | Buffer | null {
+    const body = request.raw.body;
+    return body ? readWebBody(body, limit) : null;
+  }
   getRequestHostname(request: NativeRequest): string {
     return request.hostname;
   }
@@ -158,9 +198,11 @@ export abstract class NativeHttpAdapter<TServer> extends AbstractHttpAdapter<
     this.notFound = handler;
   }
   registerParserMiddleware(_prefix?: string, rawBody = false): void {
-    this.use(async (req, _res, next) => {
-      await parseRequestBody(req, this.adapterOptions.bodyLimit ?? 100 * 1024, rawBody);
-      next();
+    const limit = this.adapterOptions.bodyLimit ?? 100 * 1024;
+    const read = this.readBody.bind(this);
+    this.use((req, _res, next) => {
+      if (!isParsedMethod(req.method)) return next();
+      return parseRequestBody(req, limit, rawBody, read).then(() => next());
     });
   }
   createMiddlewareFactory(method: RequestMethod) {

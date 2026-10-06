@@ -15,7 +15,8 @@ The two adapters include shared router, request parsing, and response code in th
 `shared/` is internal source, not a separate npm package.
 Run `pnpm run build` before packing or publishing either adapter; only `dist/` is shipped. Packages are not published to npm yet. Supported baseline:
 NestJS **12.1.2**, Node.js 22+, current Bun. Other Nest versions are not yet verified.
-Neither adapter uses Express or Fastify. Express is a test-only reference.
+Neither adapter uses Express or Fastify. Express is a test-only reference and
+Fastify a benchmark-only one.
 
 ## Compatibility matrix
 
@@ -83,7 +84,8 @@ transport-specific code before replacing the platform adapter:
 
 - Change adapter construction to `new NodeHttpAdapter()` or
   `new BunHttpAdapter()`. Do not install Express/Fastify platform plugins.
-- Treat `@Req()` as `NativeRequest`; its `.raw` is a Web `Request`, not an
+- Treat `@Req()` as `NativeRequest`; its `.raw` is a Web `Request` (built on
+  first access on Node, so only touch it when you need it), not an
   Express `Request`, Fastify request, or Node `IncomingMessage`.
 - Treat `@Res()` as `NativeResponse`. `res.status(...).json(...)` and
   `res.setHeader(...)` are available, but Express/Fastify APIs, direct Node
@@ -198,6 +200,7 @@ clients, uploads, static-file workloads, SSE, or reverse-proxy overhead:
 ```sh
 pnpm bench          # NodeHttpAdapter on Node
 pnpm bench:express  # Nest/Express on Node
+pnpm bench:fastify  # Nest/Fastify on Node
 pnpm bench:bun      # BunHttpAdapter on Bun
 ```
 

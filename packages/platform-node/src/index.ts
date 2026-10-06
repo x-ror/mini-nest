@@ -1,15 +1,138 @@
-import { createServer, type Server } from "node:http";
-import { PassThrough, Readable } from "node:stream";
-import { finished } from "node:stream/promises";
-import type { NestApplicationOptions } from "@nestjs/common";
-import { NativeHttpAdapter } from "@shared";
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { PassThrough, Readable, pipeline } from "node:stream";
+import { PayloadTooLargeException, type NestApplicationOptions } from "@nestjs/common";
+import {
+  NativeHttpAdapter,
+  NativeResponse,
+  NullObject,
+  parseQuery,
+  type NativeRequest,
+  type ResponseBody,
+} from "@shared";
 
 export { NativeResponse } from "@shared";
 
 export type { NativeAdapterOptions, NativeRequest } from "@shared";
 
-// Bodies up to this declared size are buffered and written in a single call.
-const SMALL_BODY_LIMIT = 64 * 1024;
+const EMPTY_BODY = Buffer.alloc(0);
+
+/** Request facade read straight from `IncomingMessage`; costly fields are lazy. */
+class NodeRequest implements NativeRequest {
+  readonly method: string;
+  url: string;
+  originalUrl: string;
+  path: string;
+  params = new NullObject<string | string[]>();
+  body?: unknown;
+  rawBody?: Buffer;
+  private search: string;
+  private parsedQuery?: Record<string, string | string[]>;
+  private webRequest?: Request;
+
+  constructor(
+    readonly incoming: IncomingMessage,
+    private readonly outgoing: ServerResponse,
+  ) {
+    this.method = incoming.method ?? "GET";
+    let url = incoming.url ?? "/";
+    if (url.charCodeAt(0) !== 47) {
+      // Absolute-form and asterisk-form targets are rare; let URL sort them out.
+      const parsed = new URL(url, "http://localhost");
+      url = parsed.pathname + parsed.search;
+    }
+    const queryStart = url.indexOf("?");
+    this.url = url;
+    this.originalUrl = url;
+    this.path = queryStart === -1 ? url : url.slice(0, queryStart);
+    this.search = queryStart === -1 ? "" : url.slice(queryStart + 1);
+  }
+
+  get headers(): Record<string, string> {
+    return this.incoming.headers as Record<string, string>;
+  }
+  get hostname(): string {
+    return (this.incoming.headers.host ?? "localhost").replace(/:\d*$/, "");
+  }
+  get protocol(): string {
+    return "http";
+  }
+  get ip(): string | undefined {
+    return this.incoming.socket.remoteAddress;
+  }
+  get query(): Record<string, string | string[]> {
+    return (this.parsedQuery ??= parseQuery(this.search));
+  }
+  set query(value: Record<string, string | string[]>) {
+    this.parsedQuery = value;
+  }
+  /** Built on first access; the body is only attached if nothing has read it yet. */
+  get raw(): Request {
+    if (this.webRequest) return this.webRequest;
+    const { incoming, outgoing, method } = this;
+    const headers = new Headers();
+    for (const [name, value] of Object.entries(incoming.headers)) {
+      if (value === undefined) continue;
+      if (Array.isArray(value)) {
+        for (const entry of value) headers.append(name, entry);
+      } else {
+        headers.set(name, value);
+      }
+    }
+    const controller = new AbortController();
+    if (outgoing.destroyed && !outgoing.writableFinished) controller.abort();
+    outgoing.once("close", () => {
+      if (!outgoing.writableFinished) controller.abort();
+    });
+    const init: RequestInit & { duplex?: "half" } = {
+      method,
+      headers,
+      signal: controller.signal,
+    };
+    if (method !== "GET" && method !== "HEAD" && !incoming.readableDidRead) {
+      const body = new PassThrough();
+      incoming.pipe(body);
+      incoming.once("error", (error) => body.destroy(error));
+      body.once("close", () => {
+        incoming.unpipe(body);
+        incoming.resume();
+      });
+      init.body = Readable.toWeb(body) as ReadableStream<Uint8Array>;
+      init.duplex = "half";
+    }
+    return (this.webRequest = new Request(
+      new URL(this.originalUrl, `http://${incoming.headers.host ?? "localhost"}`),
+      init,
+    ));
+  }
+}
+
+/** Writes straight to `ServerResponse`, skipping the fetch `Response` round trip. */
+class NodeResponse extends NativeResponse {
+  constructor(
+    method: string,
+    private readonly outgoing: ServerResponse,
+  ) {
+    super(method);
+  }
+  protected override commit(body: ResponseBody): void {
+    const outgoing = this.outgoing;
+    if (outgoing.destroyed) {
+      if (body instanceof Readable) body.destroy();
+      return;
+    }
+    outgoing.writeHead(this.statusCode, this.headerValues);
+    if (body instanceof Readable) {
+      pipeline(body, outgoing, (error) => {
+        if (error && error.code !== "ERR_STREAM_PREMATURE_CLOSE")
+          console.error("Node HTTP response stream failed", error);
+      });
+    } else if (body === null) {
+      outgoing.end();
+    } else {
+      outgoing.end(body);
+    }
+  }
+}
 
 export class NodeHttpAdapter extends NativeHttpAdapter<Server> {
   private forceCloseConnections = false;
@@ -18,77 +141,42 @@ export class NodeHttpAdapter extends NativeHttpAdapter<Server> {
     this.validateApplicationOptions(options);
     this.forceCloseConnections = options.forceCloseConnections ?? false;
     this.httpServer = createServer((incoming, outgoing) => {
-      void (async () => {
-        const headers = new Headers();
-        for (const [name, value] of Object.entries(incoming.headers)) {
-          if (value === undefined) continue;
-          if (Array.isArray(value)) {
-            for (const entry of value) headers.append(name, entry);
-          } else {
-            headers.set(name, value);
-          }
+      const request = new NodeRequest(incoming, outgoing);
+      this.dispatch(request, new NodeResponse(request.method, outgoing));
+    });
+  }
+
+  protected override readBody(
+    request: NativeRequest,
+    limit: number,
+  ): Promise<Buffer> | Buffer | null {
+    if (!(request instanceof NodeRequest)) return super.readBody(request, limit);
+    const incoming = request.incoming;
+    const declared = incoming.headers["content-length"];
+    if (declared === undefined && incoming.headers["transfer-encoding"] === undefined)
+      return EMPTY_BODY;
+    return new Promise((resolve, reject) => {
+      const chunks: Buffer[] = [];
+      let size = 0;
+      const settle = (error?: unknown): void => {
+        incoming.off("data", onData).off("end", onEnd).off("error", settle).off("close", onClose);
+        if (error === undefined) {
+          resolve(chunks.length === 1 ? chunks[0]! : Buffer.concat(chunks, size));
+        } else {
+          // Drain what is left so the error response can still be delivered.
+          incoming.resume();
+          reject(error);
         }
-        const controller = new AbortController();
-        outgoing.once("close", () => {
-          if (!outgoing.writableFinished) controller.abort();
-        });
-        const method = incoming.method ?? "GET";
-        const origin = `http://${headers.get("host") ?? "localhost"}`;
-        const init: RequestInit & { duplex?: "half" } = {
-          method,
-          headers,
-          signal: controller.signal,
-        };
-        if (method !== "GET" && method !== "HEAD") {
-          const body = new PassThrough();
-          incoming.pipe(body);
-          incoming.once("error", (error) => body.destroy(error));
-          body.once("close", () => {
-            incoming.unpipe(body);
-            incoming.resume();
-          });
-          init.body = Readable.toWeb(body) as ReadableStream<Uint8Array>;
-          init.duplex = "half";
-        }
-        const response = await this.fetch(new Request(new URL(incoming.url ?? "/", origin), init), {
-          ip: incoming.socket.remoteAddress,
-        });
-        outgoing.statusCode = response.status;
-        response.headers.forEach((value, name) => {
-          if (name !== "set-cookie") outgoing.setHeader(name, value);
-        });
-        const cookies = response.headers.getSetCookie();
-        if (cookies.length) outgoing.setHeader("set-cookie", cookies);
-        if (!response.body) {
-          outgoing.end();
-          return;
-        }
-        const length = Number(response.headers.get("content-length"));
-        if (length > 0 && length <= SMALL_BODY_LIMIT) {
-          const bytes = Buffer.from(await response.arrayBuffer());
-          if (!outgoing.destroyed) outgoing.end(bytes);
-          return;
-        }
-        const responseStream = Readable.fromWeb(
-          response.body as import("node:stream/web").ReadableStream<Uint8Array>,
-        );
-        const responseFinished = finished(outgoing, { cleanup: true });
-        responseStream.once("error", (error) => outgoing.destroy(error));
-        outgoing.once("close", () => {
-          if (!outgoing.writableFinished) responseStream.destroy();
-        });
-        responseStream.pipe(outgoing);
-        await responseFinished;
-      })().catch((error: unknown) => {
-        console.error("Node HTTP transport failed", error);
-        if (outgoing.headersSent) {
-          outgoing.destroy(error instanceof Error ? error : undefined);
-          return;
-        }
-        outgoing.statusCode = 500;
-        outgoing.setHeader("content-type", "application/json; charset=utf-8");
-        outgoing.end(JSON.stringify({ statusCode: 500, message: "Internal server error" }));
-      });
+      };
+      const onData = (chunk: Buffer): void => {
+        size += chunk.length;
+        if (size > limit) settle(new PayloadTooLargeException());
+        else chunks.push(chunk);
+      };
+      const onEnd = (): void => settle();
+      const onClose = (): void => settle(new Error("Request body was aborted."));
+      if (Number(declared) > limit) return settle(new PayloadTooLargeException());
+      incoming.on("data", onData).on("end", onEnd).on("error", settle).on("close", onClose);
     });
   }
 

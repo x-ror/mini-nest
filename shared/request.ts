@@ -16,16 +16,38 @@ export interface NativeRequest {
   rawBody?: Buffer;
 }
 
-function queryObject(values: URLSearchParams): Record<string, string | string[]> {
-  const result: Record<string, string | string[]> = Object.create(null);
-  for (const [key, value] of values) {
-    const previous = result[key];
-    result[key] =
-      previous === undefined
-        ? value
-        : Array.isArray(previous)
-          ? [...previous, value]
-          : [previous, value];
+// Prototype-free like new NullObject(), but stays a fast-mode V8 object:
+// several times cheaper to fill, iterate and JSON.stringify.
+export const NullObject = function () {} as unknown as new <T = unknown>() => Record<string, T>;
+NullObject.prototype = Object.create(null);
+
+function decodeQueryPart(text: string): string {
+  if (!text.includes("%") && !text.includes("+")) return text;
+  const spaced = text.replaceAll("+", " ");
+  try {
+    return decodeURIComponent(spaced);
+  } catch {
+    return spaced;
+  }
+}
+
+// Repeated keys become arrays; keys without "=" get an empty string.
+export function parseQuery(search: string): Record<string, string | string[]> {
+  const result = new NullObject<string | string[]>();
+  for (let start = 0; start < search.length;) {
+    let end = search.indexOf("&", start);
+    if (end === -1) end = search.length;
+    if (end > start) {
+      const equals = search.indexOf("=", start);
+      const split = equals !== -1 && equals < end ? equals : end;
+      const key = decodeQueryPart(search.slice(start, split));
+      const value = split === end ? "" : decodeQueryPart(search.slice(split + 1, end));
+      const previous = result[key];
+      if (previous === undefined) result[key] = value;
+      else if (typeof previous === "string") result[key] = [previous, value];
+      else previous.push(value);
+    }
+    start = end + 1;
   }
   return result;
 }
@@ -60,7 +82,7 @@ function assignFormValue(target: unknown, path: string[], value: FormDataEntryVa
       return;
     }
     const nextPart = rest[0]!;
-    const child = nextPart === "" || /^\d+$/.test(nextPart) ? [] : Object.create(null);
+    const child = nextPart === "" || /^\d+$/.test(nextPart) ? [] : new NullObject();
     target.push(child);
     assignFormValue(child, rest, value);
     return;
@@ -83,7 +105,7 @@ function assignFormValue(target: unknown, path: string[], value: FormDataEntryVa
         ? existing
         : nextPart === "" || /^\d+$/.test(nextPart)
           ? []
-          : Object.create(null);
+          : new NullObject();
     target[index] = child;
     assignFormValue(child, rest, value);
     return;
@@ -105,7 +127,7 @@ function assignFormValue(target: unknown, path: string[], value: FormDataEntryVa
       ? existing
       : nextPart === "" || /^\d+$/.test(nextPart)
         ? []
-        : Object.create(null);
+        : new NullObject();
   object[part] = child;
   assignFormValue(child, rest, value);
 }
@@ -113,43 +135,42 @@ function assignFormValue(target: unknown, path: string[], value: FormDataEntryVa
 function nestedFormObject(
   entries: Iterable<[string, FormDataEntryValue]>,
 ): Record<string, unknown> {
-  const result: Record<string, unknown> = Object.create(null);
+  const result = new NullObject();
   for (const [key, value] of entries) assignFormValue(result, formFieldPath(key), value);
   return result;
 }
 
 export function createRequest(raw: Request, ip?: string): NativeRequest {
-  const url = new URL(raw.url);
+  // `Request.url` is already an absolute, normalized URL; slicing avoids a reparse.
+  const full = raw.url;
+  const hostStart = full.indexOf("://") + 3;
+  const pathStart = full.indexOf("/", hostStart);
+  const url = pathStart === -1 ? "/" : full.slice(pathStart);
+  const queryStart = url.indexOf("?");
   return {
     raw,
     ip,
     method: raw.method,
-    url: `${url.pathname}${url.search}`,
-    originalUrl: `${url.pathname}${url.search}`,
-    path: url.pathname,
-    hostname: url.hostname,
-    protocol: url.protocol.slice(0, -1),
+    url,
+    originalUrl: url,
+    path: queryStart === -1 ? url : url.slice(0, queryStart),
+    hostname: full
+      .slice(hostStart, pathStart === -1 ? undefined : pathStart)
+      .replace(/^.*@|:\d*$/g, ""),
+    protocol: full.slice(0, hostStart - 3),
     headers: Object.fromEntries(raw.headers),
-    params: Object.create(null),
-    query: queryObject(url.searchParams),
+    params: new NullObject(),
+    query: queryStart === -1 ? new NullObject() : parseQuery(url.slice(queryStart + 1)),
   };
 }
 
-export async function parseRequestBody(
-  request: NativeRequest,
+export type BodyReader = (request: NativeRequest, limit: number) => Promise<Buffer> | Buffer | null;
+
+export async function readWebBody(
+  body: ReadableStream<Uint8Array>,
   limit: number,
-  rawBody: boolean,
-): Promise<void> {
-  if (request.method === "GET" || request.method === "HEAD" || !request.raw.body) return;
-  const type = request.headers["content-type"]?.split(";")[0]?.trim().toLowerCase();
-  if (
-    type !== "application/json" &&
-    !type?.endsWith("+json") &&
-    type !== "application/x-www-form-urlencoded" &&
-    type !== "multipart/form-data"
-  )
-    return;
-  const reader = request.raw.body.getReader();
+): Promise<Buffer> {
+  const reader = body.getReader();
   const chunks: Uint8Array[] = [];
   let size = 0;
   try {
@@ -166,20 +187,40 @@ export async function parseRequestBody(
   } finally {
     reader.releaseLock();
   }
-  const bytes = Buffer.concat(chunks);
+  return Buffer.concat(chunks, size);
+}
+
+export function isParsedMethod(method: string): boolean {
+  return method !== "GET" && method !== "HEAD";
+}
+
+export async function parseRequestBody(
+  request: NativeRequest,
+  limit: number,
+  rawBody: boolean,
+  read: BodyReader,
+): Promise<void> {
+  const contentType = request.headers["content-type"];
+  const type = contentType?.split(";")[0]?.trim().toLowerCase();
+  if (
+    type !== "application/json" &&
+    !type?.endsWith("+json") &&
+    type !== "application/x-www-form-urlencoded" &&
+    type !== "multipart/form-data"
+  )
+    return;
+  const bytes = await read(request, limit);
+  if (bytes === null) return;
   if (rawBody) request.rawBody = bytes;
-  if (!size && type !== "multipart/form-data") {
+  if (!bytes.length && type !== "multipart/form-data") {
     request.body = {};
     return;
   }
   if (type === "multipart/form-data") {
     try {
-      const formRequest = new Request(request.raw.url, {
-        method: request.method,
-        headers: request.raw.headers,
-        body: bytes,
-      });
-      const formData = await formRequest.formData();
+      const formData = await new Response(bytes as unknown as BodyInit, {
+        headers: { "content-type": contentType! },
+      }).formData();
       request.body = nestedFormObject(formData.entries());
       return;
     } catch (error) {
