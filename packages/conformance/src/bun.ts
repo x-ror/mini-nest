@@ -1,7 +1,16 @@
 import { ExpressAdapter } from "@nestjs/platform-express";
 import { Module } from "@nestjs/common";
-import { MessageBody, SubscribeMessage, WebSocketGateway } from "@nestjs/websockets";
+import {
+  ConnectedSocket,
+  MessageBody,
+  SubscribeMessage,
+  WebSocketGateway,
+  WebSocketServer,
+} from "@nestjs/websockets";
 import { BunHttpAdapter, BunWsAdapter } from "nestjs-adapter-bun";
+import { BunIoAdapter } from "nestjs-adapter-bun/socket.io";
+import { io as connect } from "socket.io-client";
+import type { Server, Socket } from "socket.io";
 import assert from "node:assert/strict";
 import { NestFactory } from "@nestjs/core";
 import { compareAdapters, startFixture } from "./compare.js";
@@ -96,6 +105,65 @@ try {
 } finally {
   await realtime.close();
 }
+
+@WebSocketGateway({ namespace: "chat" })
+class ChatGateway {
+  @WebSocketServer() server!: Server;
+  @SubscribeMessage("joinRoom")
+  join(@ConnectedSocket() client: Socket, @MessageBody() room: string) {
+    void client.join(room);
+    client.emit("joinedRoom", room);
+  }
+  @SubscribeMessage("chatToServer")
+  chat(@MessageBody() payload: { room: string; message: string }) {
+    this.server.to(payload.room).emit("chatToClient", payload);
+  }
+}
+@Module({ imports: [FixtureModule], providers: [ChatGateway] })
+class ChatModule {}
+
+const chatApp = await NestFactory.create(ChatModule, new BunHttpAdapter(), { logger: false });
+chatApp.useWebSocketAdapter(new BunIoAdapter(chatApp));
+try {
+  await chatApp.listen(0, "127.0.0.1");
+  const base = await chatApp.getUrl();
+  // Polling first, then upgrade to WebSocket: the default client behaviour.
+  for (const transports of [["polling", "websocket"], ["websocket"], ["polling"]]) {
+    const member = connect(`${base}/chat`, { transports, forceNew: true });
+    const outsider = connect(`${base}/chat`, { transports, forceNew: true });
+    try {
+      let leaked = false;
+      outsider.on("chatToClient", () => (leaked = true));
+      await new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(
+          () => reject(new Error(`Socket.IO timed out (${transports.join()})`)),
+          5000,
+        );
+        member.on("connect_error", reject);
+        member.on("connect", () => member.emit("joinRoom", "general"));
+        member.on("joinedRoom", () =>
+          outsider.emit("chatToServer", { room: "general", message: "hi" }),
+        );
+        member.on("chatToClient", (payload: unknown) => {
+          clearTimeout(timer);
+          assert.deepEqual(payload, { room: "general", message: "hi" });
+          resolve();
+        });
+      });
+      assert.equal(leaked, false);
+    } finally {
+      member.close();
+      outsider.close();
+    }
+  }
+  assert.equal((await fetch(`${base}/api`)).status, 200);
+  const client = await fetch(`${base}/socket.io/socket.io.js`);
+  assert.equal(client.status, 200);
+  assert.match(await client.text(), /Socket\.IO/);
+  assert.equal((await fetch(`${base}/socket.io/package.json`)).status, 404);
+} finally {
+  await chatApp.close();
+}
 console.log(
-  "native-bun: initialization, native server, listen failure, WebSockets, and close lifecycle passed.",
+  "native-bun: initialization, native server, listen failure, WebSockets, Socket.IO, and close lifecycle passed.",
 );

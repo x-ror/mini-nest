@@ -8,10 +8,15 @@ const packageAliases = Object.fromEntries(
   ]),
 );
 
+const socketIoAlias = {
+  "nestjs-adapter-bun/socket.io": fileURLToPath(
+    new URL("./packages/platform-bun/src/socket.io.ts", import.meta.url),
+  ),
+};
 const sharedAliases = {
   "@shared": fileURLToPath(new URL("./shared/index.ts", import.meta.url)),
 };
-const aliases = { ...packageAliases, ...sharedAliases };
+const aliases = { ...socketIoAlias, ...packageAliases, ...sharedAliases };
 
 export default defineConfig({
   resolve: { alias: aliases },
@@ -24,7 +29,10 @@ export default defineConfig({
   pack: [
     ...["platform-node", "platform-bun"].map((name) => ({
       name,
-      entry: { index: `packages/${name}/src/index.ts` },
+      entry: {
+        index: `packages/${name}/src/index.ts`,
+        ...(name === "platform-bun" && { "socket.io": `packages/${name}/src/socket.io.ts` }),
+      },
       outDir: `packages/${name}/dist`,
       tsconfig: "tsconfig.build.json",
       platform: "node" as const,
@@ -32,7 +40,9 @@ export default defineConfig({
       alias: sharedAliases,
       dts: true,
       sourcemap: true,
-      deps: { neverBundle: [/^nestjs-adapter-/, /^@nestjs\//, "path-to-regexp"] },
+      deps: {
+        neverBundle: [/^nestjs-adapter-/, /^@nestjs\//, /^@?socket\.io/, "path-to-regexp"],
+      },
     })),
     {
       name: "example",
@@ -60,7 +70,15 @@ export default defineConfig({
       tsconfig: "packages/conformance/tsconfig.json",
       platform: "node",
       fixedExtension: false,
-      deps: { neverBundle: [/^nestjs-adapter-/, /^@nestjs\//, "reflect-metadata", "rxjs"] },
+      deps: {
+        neverBundle: [
+          /^nestjs-adapter-/,
+          /^@nestjs\//,
+          /^@?socket\.io/,
+          "reflect-metadata",
+          "rxjs",
+        ],
+      },
       dts: false,
       sourcemap: true,
     },

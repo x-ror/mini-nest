@@ -6,7 +6,11 @@ catalog:
   "@nestjs/core": "12.1.2"
   "@nestjs/platform-express": "12.1.2"
   "@nestjs/platform-fastify": "12.1.2"
+  "@nestjs/platform-socket.io": "12.1.2"
   "@nestjs/platform-ws": "12.1.2"
+  "@socket.io/bun-engine": "0.1.2"
+  "socket.io": "4.8.3"
+  "socket.io-client": "^4.8.3"
   "@nestjs/websockets": "12.1.2"
   "ws": "^8.18.0"
   "@types/ws": "^8.5.13"
@@ -22,6 +26,7 @@ catalogs:
   nest-peers:
     "@nestjs/common": "^12.1.2"
     "@nestjs/core": "^12.1.2"
+    "@nestjs/platform-socket.io": "^12.1.2"
 
 overrides:
   "vite": "npm:@voidzero-dev/vite-plus-core@1.0.0"

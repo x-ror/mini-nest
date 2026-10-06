@@ -8,10 +8,14 @@
     "@nestjs/core": "catalog:",
     "@nestjs/platform-express": "catalog:",
     "@nestjs/platform-fastify": "catalog:",
+    "@nestjs/platform-socket.io": "catalog:",
     "@nestjs/websockets": "catalog:",
+    "@socket.io/bun-engine": "catalog:",
     "nestjs-adapter-bun": "workspace:*",
     "nestjs-adapter-node": "workspace:*",
     "reflect-metadata": "catalog:",
-    "rxjs": "catalog:"
+    "rxjs": "catalog:",
+    "socket.io": "catalog:",
+    "socket.io-client": "catalog:"
   }
 }

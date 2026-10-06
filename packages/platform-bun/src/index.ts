@@ -7,18 +7,46 @@ export { NativeResponse } from "@shared";
 
 export type { NativeAdapterOptions, NativeRequest } from "@shared";
 
-interface SocketData {
-  gateway: BunWsGateway;
-  onMessage?: (message: string | Buffer) => void;
-  onClose?: () => void;
+const OWNER = Symbol("socketTransport");
+type AnySocket = Bun.ServerWebSocket<any>;
+
+/**
+ * A WebSocket integration that shares the adapter's `Bun.serve` instance, such
+ * as `BunWsAdapter` or Socket.IO's Bun engine.
+ */
+export interface BunSocketTransport {
+  /**
+   * Answers or upgrades (through `server.upgrade`) a request it owns. Returning
+   * `null` leaves the request to the next transport and then to HTTP routing.
+   */
+  handle(
+    request: Request,
+    pathname: string,
+    server: {
+      upgrade(request: Request, options?: { headers?: HeadersInit; data?: object }): boolean;
+    },
+  ): Response | undefined | null | Promise<Response | undefined>;
+  websocket: {
+    open?(socket: AnySocket): void;
+    message(socket: AnySocket, message: string | Buffer): void;
+    close?(socket: AnySocket, code: number, reason: string): void;
+  };
+  /** Seconds an idle connection may stay open; the largest value wins. */
+  idleTimeout?: number;
 }
+
 /** The client passed to gateway handlers: Bun's native server-side socket. */
-export type BunSocket = Bun.ServerWebSocket<SocketData>;
+export type BunSocket = Bun.ServerWebSocket<unknown>;
 /** The value injected by `@WebSocketServer()`. */
 export class BunWsGateway {
   readonly clients = new Set<BunSocket>();
   onConnection?: (client: BunSocket) => void;
   constructor(readonly path: string) {}
+}
+interface SocketState {
+  gateway: BunWsGateway;
+  onMessage?: (message: string | Buffer) => void;
+  onClose?: () => void;
 }
 interface MessageHandler {
   message: unknown;
@@ -33,12 +61,37 @@ interface Subscribable {
  * Speaks the same `{ event, data }` JSON messages as Nest's `WsAdapter`.
  */
 export class BunWsAdapter implements WebSocketAdapter<BunWsGateway, BunSocket> {
-  private readonly gateways: Map<string, BunWsGateway>;
+  private readonly gateways = new Map<string, BunWsGateway>();
+  // Kept outside `socket.data` so application code is free to use that field.
+  private readonly sockets = new WeakMap<BunSocket, SocketState>();
   constructor(app: { getHttpAdapter(): unknown }) {
-    const adapter = app.getHttpAdapter();
-    if (!(adapter instanceof BunHttpAdapter))
-      throw new Error("BunWsAdapter requires an application created with BunHttpAdapter.");
-    this.gateways = adapter.gateways;
+    const sockets = this.sockets;
+    bunAdapterOf(app, "BunWsAdapter").addSocketTransport({
+      handle: (request, pathname, server) => {
+        const gateway = this.gateways.get(pathname);
+        if (!gateway || request.headers.get("upgrade")?.toLowerCase() !== "websocket") return null;
+        return server.upgrade(request, { data: { gateway } })
+          ? undefined
+          : new Response("WebSocket upgrade failed", { status: 400 });
+      },
+      websocket: {
+        open(socket) {
+          const gateway = (socket.data as { gateway: BunWsGateway }).gateway;
+          socket.data = undefined;
+          sockets.set(socket, { gateway });
+          gateway.clients.add(socket);
+          gateway.onConnection?.(socket);
+        },
+        message(socket, message) {
+          sockets.get(socket)?.onMessage?.(message);
+        },
+        close(socket) {
+          const state = sockets.get(socket);
+          state?.gateway.clients.delete(socket);
+          state?.onClose?.();
+        },
+      },
+    });
   }
   create(port: number, options: { path?: string; namespace?: string } = {}): BunWsGateway {
     if (port !== 0) throw new Error("BunWsAdapter gateways share the HTTP port; omit the port.");
@@ -52,7 +105,7 @@ export class BunWsAdapter implements WebSocketAdapter<BunWsGateway, BunSocket> {
     server.onConnection = callback as (client: BunSocket) => void;
   }
   bindClientDisconnect(client: BunSocket, callback: Function): void {
-    client.data.onClose = callback as () => void;
+    this.sockets.get(client)!.onClose = callback as () => void;
   }
   bindMessageHandlers(
     client: BunSocket,
@@ -71,7 +124,7 @@ export class BunWsAdapter implements WebSocketAdapter<BunWsGateway, BunSocket> {
       },
       error: (error: unknown): void => console.error("WebSocket handler failed", error),
     };
-    client.data.onMessage = (raw) => {
+    this.sockets.get(client)!.onMessage = (raw) => {
       // Malformed frames and unknown events are client input, so they are dropped quietly.
       let message: { event?: unknown; data?: unknown } | null;
       try {
@@ -96,8 +149,16 @@ export class BunWsAdapter implements WebSocketAdapter<BunWsGateway, BunSocket> {
   dispose(): void {}
 }
 
+/** Returns the application's `BunHttpAdapter`, for WebSocket integrations. */
+export function bunAdapterOf(app: { getHttpAdapter(): unknown }, user: string): BunHttpAdapter {
+  const adapter = app.getHttpAdapter();
+  if (!(adapter instanceof BunHttpAdapter))
+    throw new Error(`${user} requires an application created with BunHttpAdapter.`);
+  return adapter;
+}
+
 export class BunServerFacade extends EventEmitter {
-  native?: Bun.Server<SocketData>;
+  native?: Bun.Server<any>;
   get listening(): boolean {
     return this.native !== undefined;
   }
@@ -116,8 +177,11 @@ export class BunServerFacade extends EventEmitter {
 }
 
 export class BunHttpAdapter extends NativeHttpAdapter<BunServerFacade> {
-  /** WebSocket gateways by path, registered by `BunWsAdapter`. */
-  readonly gateways = new Map<string, BunWsGateway>();
+  private readonly transports: BunSocketTransport[] = [];
+  /** Registers a WebSocket integration; call before `listen()`. */
+  addSocketTransport(transport: BunSocketTransport): void {
+    this.transports.push(transport);
+  }
   private forceCloseConnections = false;
   private tls?: NestApplicationOptions["httpsOptions"];
   initHttpServer(options: NestApplicationOptions): void {
@@ -141,30 +205,45 @@ export class BunHttpAdapter extends NativeHttpAdapter<BunServerFacade> {
       if (!Number.isInteger(numericPort) || numericPort < 0 || numericPort > 65535) {
         throw new Error("BunHttpAdapter requires a TCP port between 0 and 65535.");
       }
-      this.httpServer.native = Bun.serve<SocketData>({
+      const transports = this.transports;
+      // The upgrade tags a socket with its transport; remembering it here leaves
+      // `socket.data` free for the transport and the application to replace.
+      const owners = new WeakMap<AnySocket, BunSocketTransport["websocket"]>();
+      this.httpServer.native = Bun.serve<any>({
         port: numericPort,
         hostname: typeof hostnameOrCallback === "string" ? hostnameOrCallback : "0.0.0.0",
         // Bun reads key, cert, ca and passphrase; other Node TLS options are ignored.
         tls: this.tls as Bun.TLSOptions | undefined,
+        idleTimeout:
+          Math.max(0, ...transports.map((transport) => transport.idleTimeout ?? 0)) || undefined,
         fetch: (request, server) => {
-          if (this.gateways.size && request.headers.get("upgrade")?.toLowerCase() === "websocket") {
-            const gateway = this.gateways.get(new URL(request.url).pathname);
-            if (gateway && server.upgrade(request, { data: { gateway } })) return undefined;
+          if (transports.length) {
+            const url = request.url;
+            const start = url.indexOf("/", url.indexOf("://") + 3);
+            const end = url.indexOf("?", start);
+            const pathname = start === -1 ? "/" : url.slice(start, end === -1 ? undefined : end);
+            for (const transport of transports) {
+              const result = transport.handle(request, pathname, {
+                // Tag the socket so its events go back to the transport that upgraded it.
+                upgrade: (target, options) =>
+                  server.upgrade(target, {
+                    ...options,
+                    data: { ...options?.data, [OWNER]: transport },
+                  } as never),
+              });
+              if (result !== null) return result;
+            }
           }
           return this.fetch(request, { ip: server.requestIP(request)?.address });
         },
         websocket: {
-          open(socket) {
-            socket.data.gateway.clients.add(socket);
-            socket.data.gateway.onConnection?.(socket);
+          open: (socket) => {
+            const owner = (socket.data as { [OWNER]: BunSocketTransport })[OWNER].websocket;
+            owners.set(socket, owner);
+            owner.open?.(socket);
           },
-          message(socket, message) {
-            socket.data.onMessage?.(message);
-          },
-          close(socket) {
-            socket.data.gateway.clients.delete(socket);
-            socket.data.onClose?.();
-          },
+          message: (socket, message) => owners.get(socket)?.message(socket, message),
+          close: (socket, code, reason) => owners.get(socket)?.close?.(socket, code, reason),
         },
         error: (error) => {
           console.error("Bun HTTP transport failed", error);

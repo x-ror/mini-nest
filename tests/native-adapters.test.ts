@@ -18,6 +18,7 @@ import {
 import { ExpressAdapter } from "@nestjs/platform-express";
 import { WsAdapter } from "@nestjs/platform-ws";
 import { MessageBody, SubscribeMessage, WebSocketGateway } from "@nestjs/websockets";
+import { io as connect } from "socket.io-client";
 import { WebSocket } from "ws";
 import { NodeHttpAdapter, NativeResponse, type NativeRequest } from "nestjs-adapter-node";
 import { BunHttpAdapter } from "nestjs-adapter-bun";
@@ -49,6 +50,16 @@ class EchoGateway {
 }
 @Module({ imports: [FixtureModule], providers: [EchoGateway] })
 class GatewayModule {}
+
+@WebSocketGateway({ namespace: "chat" })
+class ChatGateway {
+  @SubscribeMessage("ping")
+  ping(@MessageBody() data: unknown) {
+    return { event: "pong", data };
+  }
+}
+@Module({ imports: [FixtureModule], providers: [ChatGateway] })
+class ChatModule {}
 
 const apps: INestApplication[] = [];
 afterEach(async () => {
@@ -413,6 +424,25 @@ describe("native Nest adapters", () => {
     });
     socket.close();
     expect(JSON.parse(reply)).toEqual({ event: "echo", data: { n: 1 } });
+    expect((await fetch(`${base}/api`)).status).toBe(200);
+  });
+  it("works with Nest's default Socket.IO adapter without extra setup", async () => {
+    const app = await NestFactory.create(ChatModule, new NodeHttpAdapter(), { logger: false });
+    apps.push(app);
+    await app.listen(0, "127.0.0.1");
+    const base = await app.getUrl();
+    const socket = connect(`${base}/chat`, { forceNew: true });
+    try {
+      const reply = await new Promise((resolve, reject) => {
+        socket.on("connect_error", reject);
+        socket.on("connect", () => socket.emit("ping", { n: 1 }));
+        socket.on("pong", resolve);
+      });
+      expect(reply).toEqual({ n: 1 });
+    } finally {
+      socket.close();
+    }
+    expect((await fetch(`${base}/socket.io/socket.io.js`)).status).toBe(200);
     expect((await fetch(`${base}/api`)).status).toBe(200);
   });
 });
