@@ -10,11 +10,11 @@ history, not active workspace packages.
 - Bun uses `Bun.serve`, not `node:http` running under Bun. Its native server is
   wrapped only for Nest's event/address listen contract.
 - Requests and responses use the supported fields/APIs documented in README.
-  WebSocket upgrades, Node response events, Express plugins, Multer decorators,
-  arbitrary direct response writes, custom parsers, MVC, native HTTPS, and
-  non-URI versioning remain outside the initial implementation. Nest `@Sse()`
-  Observable routes are supported. TLS should terminate at a reverse proxy;
-  forwarded headers are not interpreted by the adapter. Multipart files are
+  WebSocket upgrades, Express plugins, Multer decorators, MVC, and response
+  events on Bun remain outside the implementation. Nest `@Sse()` Observable
+  routes, `res.write()` streaming, opt-in text/raw body parsers, all Nest
+  versioning types, and native HTTPS via `httpsOptions` (untested on Bun) are
+  supported. Forwarded headers are not interpreted by the adapter. Multipart files are
   native `File` values in `@Body()`. Basic static file serving, CORS headers,
   and preflight handling are supported through the adapter middleware API.
 - `path-to-regexp` is a deliberate routing dependency; maintaining a custom

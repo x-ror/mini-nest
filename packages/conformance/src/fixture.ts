@@ -21,7 +21,6 @@ import {
   StreamableFile,
   UseGuards,
   UseInterceptors,
-  VERSION_NEUTRAL,
   Version,
   type CallHandler,
   type CanActivate,
@@ -84,16 +83,6 @@ class TestController {
   @Version("1")
   versioned() {
     return { version: "1" };
-  }
-  @Get("header-versioned")
-  @Version(["2", "3"])
-  headerVersionedNew() {
-    return { handler: "new" };
-  }
-  @Get("header-versioned")
-  @Version(VERSION_NEUTRAL)
-  headerVersionedDefault() {
-    return { handler: "default" };
   }
   @Get("items/:id") item(@Param("id", ParseIntPipe) id: number, @Query() query: unknown) {
     return { id, query };

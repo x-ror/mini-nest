@@ -116,6 +116,14 @@ class NodeResponse extends NativeResponse {
   ) {
     super(method);
   }
+  override on(event: string, listener: (...args: any[]) => void): this {
+    this.outgoing.on(event, listener);
+    return this;
+  }
+  override once(event: string, listener: (...args: any[]) => void): this {
+    this.outgoing.once(event, listener);
+    return this;
+  }
   protected override commit(body: ResponseBody): void {
     const outgoing = this.outgoing;
     if (outgoing.destroyed) {

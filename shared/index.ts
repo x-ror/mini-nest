@@ -13,9 +13,12 @@ import {
 import { NativeRouter, type Fail, type Handler, type Next } from "./router.js";
 import {
   createRequest,
+  defaultBodyKind,
   isParsedMethod,
+  mediaType,
   parseRequestBody,
   readWebBody,
+  type BodyKind,
   type NativeRequest,
 } from "./request.js";
 import { NativeResponse } from "./response.js";
@@ -201,12 +204,60 @@ export abstract class NativeHttpAdapter<TServer> extends AbstractHttpAdapter<
     this.notFound = handler;
   }
   registerParserMiddleware(_prefix?: string, rawBody = false): void {
-    const limit = this.adapterOptions.bodyLimit ?? 100 * 1024;
-    const read = this.readBody.bind(this);
-    this.use((req, _res, next) => {
-      if (!isParsedMethod(req.method)) return next();
-      return parseRequestBody(req, limit, rawBody, read).then(() => next());
+    this.use(
+      this.bodyParser(defaultBodyKind, this.adapterOptions.bodyLimit ?? 100 * 1024, rawBody),
+    );
+  }
+  /**
+   * Adds a parser ahead of the built-in one, e.g. `app.useBodyParser("text")` or
+   * `app.useBodyParser("json", { limit: "5mb", type: "application/vnd.api+json" })`.
+   */
+  useBodyParser(
+    kind: Exclude<BodyKind, "multipart">,
+    rawBody = false,
+    options: { limit?: number | string; type?: string | string[] } = {},
+  ): this {
+    const defaults = {
+      json: "application/json",
+      urlencoded: "application/x-www-form-urlencoded",
+      text: "text/plain",
+      raw: "application/octet-stream",
+    };
+    if (!(kind in defaults)) throw new Error(`Unsupported body parser type: ${String(kind)}`);
+    const size = /^(\d+(?:\.\d+)?)\s*(b|kb|mb|gb)?$/i.exec(
+      String(options.limit ?? this.adapterOptions.bodyLimit ?? 100 * 1024),
+    );
+    if (!size) throw new Error(`Invalid body parser limit: ${String(options.limit)}`);
+    const limit = Math.floor(
+      Number(size[1]) * 1024 ** ["b", "kb", "mb", "gb"].indexOf((size[2] ?? "b").toLowerCase()),
+    );
+    // Entries are exact media types, "type/*" prefixes or "*/*".
+    const types = ([] as string[]).concat(options.type ?? defaults[kind]).map((type) => {
+      const lower = type.toLowerCase();
+      return lower === "*/*" ? "" : lower.endsWith("/*") ? lower.slice(0, -1) : lower;
     });
+    const claims = (type: string | undefined): BodyKind | undefined =>
+      type !== undefined &&
+      types.some((entry) =>
+        entry.endsWith("/") || !entry ? type.startsWith(entry) : type === entry,
+      )
+        ? kind
+        : undefined;
+    return this.use(this.bodyParser(claims, limit, rawBody));
+  }
+  private bodyParser(
+    kindOf: (type: string | undefined) => BodyKind | undefined,
+    limit: number,
+    rawBody: boolean,
+  ): Handler {
+    const read = this.readBody.bind(this);
+    return (req, _res, next) => {
+      // A body set by an earlier parser is left alone.
+      if (!isParsedMethod(req.method) || req.body !== undefined) return next();
+      const kind = kindOf(mediaType(req.headers["content-type"]));
+      if (kind === undefined) return next();
+      return parseRequestBody(req, kind, limit, rawBody, read).then(() => next());
+    };
   }
   createMiddlewareFactory(method: RequestMethod) {
     return (path: string, callback: Function) => {
@@ -336,9 +387,6 @@ export abstract class NativeHttpAdapter<TServer> extends AbstractHttpAdapter<
       }
     });
     return this;
-  }
-  useBodyParser(): never {
-    throw new Error("Custom body parsers are not implemented; configure bodyLimit on the adapter.");
   }
   setBaseViewsDir(): never {
     throw new Error("MVC rendering is not supported by native adapters.");

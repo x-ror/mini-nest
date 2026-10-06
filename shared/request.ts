@@ -194,32 +194,46 @@ export function isParsedMethod(method: string): boolean {
   return method !== "GET" && method !== "HEAD";
 }
 
+export type BodyKind = "json" | "urlencoded" | "multipart" | "text" | "raw";
+
+export function mediaType(contentType: string | undefined): string | undefined {
+  return contentType?.split(";")[0]?.trim().toLowerCase();
+}
+
+/** What the built-in parser handles when no custom parser claimed the body. */
+export function defaultBodyKind(type: string | undefined): BodyKind | undefined {
+  if (type === "application/json" || type?.endsWith("+json")) return "json";
+  if (type === "application/x-www-form-urlencoded") return "urlencoded";
+  if (type === "multipart/form-data") return "multipart";
+  return undefined;
+}
+
 export async function parseRequestBody(
   request: NativeRequest,
+  kind: BodyKind,
   limit: number,
   rawBody: boolean,
   read: BodyReader,
 ): Promise<void> {
-  const contentType = request.headers["content-type"];
-  const type = contentType?.split(";")[0]?.trim().toLowerCase();
-  if (
-    type !== "application/json" &&
-    !type?.endsWith("+json") &&
-    type !== "application/x-www-form-urlencoded" &&
-    type !== "multipart/form-data"
-  )
-    return;
   const bytes = await read(request, limit);
   if (bytes === null) return;
   if (rawBody) request.rawBody = bytes;
-  if (!bytes.length && type !== "multipart/form-data") {
+  if (kind === "raw") {
+    request.body = bytes;
+    return;
+  }
+  if (kind === "text") {
+    request.body = bytes.toString("utf8");
+    return;
+  }
+  if (!bytes.length && kind !== "multipart") {
     request.body = {};
     return;
   }
-  if (type === "multipart/form-data") {
+  if (kind === "multipart") {
     try {
       const formData = await new Response(bytes as unknown as BodyInit, {
-        headers: { "content-type": contentType! },
+        headers: { "content-type": request.headers["content-type"]! },
       }).formData();
       request.body = nestedFormObject(formData.entries());
       return;
@@ -229,7 +243,7 @@ export async function parseRequestBody(
     }
   }
   const text = bytes.toString("utf8");
-  if (type === "application/x-www-form-urlencoded") {
+  if (kind === "urlencoded") {
     request.body = nestedFormObject(new URLSearchParams(text));
     return;
   }

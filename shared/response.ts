@@ -31,6 +31,7 @@ export class NativeResponse {
   // Lowercase header names; multiple values are kept as arrays.
   protected readonly headerValues = new NullObject<string | string[]>();
   private sse?: NativeSseResponse;
+  private streaming = false;
   private response?: Response;
   private pending?: Promise<Response>;
   private complete?: (response: Response) => void;
@@ -45,7 +46,7 @@ export class NativeResponse {
           this.complete = resolve;
         }));
   }
-  /** Node-style writable used by Nest's `@Sse()` support. */
+  /** Node-style writable behind `write()` and Nest's `@Sse()` support. */
   get raw(): NativeSseResponse {
     return (this.sse ??= new NativeSseResponse((statusCode, headers) => {
       if (this.headersSent) return;
@@ -122,14 +123,23 @@ export class NativeResponse {
     this.headerValues["content-type"] = "text/plain; charset=utf-8";
     return this.end(`${STATUS_CODES[this.statusCode] ?? "Redirect"}. Redirecting to ${location}`);
   }
-  end(message?: string): this {
+  end(message?: string | Uint8Array): this {
+    if (this.streaming) {
+      this.raw.end(message);
+      return this;
+    }
     return this.finish(message ?? null);
   }
-  write(): never {
-    throw new Error("Direct response writes are not supported; use Nest's @Sse() decorator.");
+  /** Starts a streamed response with the current status and headers on first use. */
+  write(chunk: string | Uint8Array): boolean {
+    if (!this.streaming) this.finish(this.raw);
+    return this.raw.write(chunk);
   }
-  on(): never {
-    throw new Error("Node response events are not supported by the fetch response facade.");
+  on(_event: string, _listener: (...args: any[]) => void): this {
+    throw new Error("Response events are only available on the Node adapter.");
+  }
+  once(event: string, listener: (...args: any[]) => void): this {
+    return this.on(event, listener);
   }
 
   /** Sends the response; the default produces a fetch `Response` for `done`. */
@@ -151,13 +161,16 @@ export class NativeResponse {
     if (this.headersSent) throw new Error("Response was already sent.");
     const status = this.statusCode;
     const headers = this.headerValues;
+    const streamed = body !== null && body === this.sse;
     if (status === 204 || status === 304) {
       delete headers["content-type"];
       delete headers["content-length"];
       delete headers["transfer-encoding"];
     }
     if (this.method === "HEAD" || status === 204 || status === 205 || status === 304) {
-      if (body instanceof Readable && body !== this.sse) body.destroy();
+      // Nothing will read the stream: release a file, or discard direct writes.
+      if (body === this.sse) this.sse?.resume();
+      else if (body instanceof Readable) body.destroy();
       body = null;
     } else if (body !== null && headers["content-length"] === undefined) {
       if (typeof body === "string") headers["content-length"] = String(Buffer.byteLength(body));
@@ -171,6 +184,7 @@ export class NativeResponse {
       throw error;
     }
     this.headersSent = true;
+    this.streaming = streamed;
     return this;
   }
 }

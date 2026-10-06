@@ -5,12 +5,37 @@ import { get as httpsGet } from "node:https";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 import { NestFactory } from "@nestjs/core";
-import { VersioningType, type INestApplication, type VersioningOptions } from "@nestjs/common";
+import {
+  Controller,
+  Get,
+  Module,
+  VERSION_NEUTRAL,
+  Version,
+  VersioningType,
+  type INestApplication,
+  type VersioningOptions,
+} from "@nestjs/common";
 import { ExpressAdapter } from "@nestjs/platform-express";
 import { NodeHttpAdapter, NativeResponse, type NativeRequest } from "nestjs-adapter-node";
 import { BunHttpAdapter } from "nestjs-adapter-bun";
 import { compareAdapters, startFixture } from "../packages/conformance/src/compare.js";
 import { FixtureModule, GreetingService } from "../packages/conformance/src/fixture.js";
+
+@Controller("versioned")
+class VersionedController {
+  @Get()
+  @Version(["2", "3"])
+  current() {
+    return { handler: "new" };
+  }
+  @Get()
+  @Version(VERSION_NEUTRAL)
+  fallback() {
+    return { handler: "default" };
+  }
+}
+@Module({ controllers: [VersionedController] })
+class VersionedModule {}
 
 const apps: INestApplication[] = [];
 afterEach(async () => {
@@ -154,7 +179,7 @@ describe("native Nest adapters", () => {
       methods: ["GET", "POST"],
       allowedHeaders: ["content-type", "x-auth"],
     });
-    expect(() => adapter.useBodyParser()).toThrow("Custom body parsers");
+    expect(() => adapter.useBodyParser("xml" as "json")).toThrow("Unsupported body parser");
     expect(() => adapter.render()).toThrow("MVC");
     expect(() => new BunHttpAdapter().initHttpServer({})).toThrow("Bun runtime");
     expect(() => new NodeHttpAdapter({ bodyLimit: -1 })).toThrow("bodyLimit");
@@ -262,11 +287,13 @@ describe("native Nest adapters", () => {
       },
     ];
     for (const { options, send, search } of cases) {
-      const app = await NestFactory.create(FixtureModule, new NodeHttpAdapter(), { logger: false });
+      const app = await NestFactory.create(VersionedModule, new NodeHttpAdapter(), {
+        logger: false,
+      });
       apps.push(app);
       app.enableVersioning(options);
       await app.listen(0, "127.0.0.1");
-      const url = `${await app.getUrl()}/api/header-versioned`;
+      const url = `${await app.getUrl()}/versioned`;
       expect(await (await fetch(url + search, { headers: send })).json()).toEqual({
         handler: "new",
       });
@@ -318,5 +345,45 @@ describe("native Nest adapters", () => {
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
+  });
+  it("supports custom body parsers, direct writes and response events", async () => {
+    const app = await NestFactory.create(FixtureModule, new NodeHttpAdapter(), { logger: false });
+    apps.push(app);
+    const parsers = app as unknown as { useBodyParser(type: string, options?: object): void };
+    parsers.useBodyParser("text", { type: "text/*" });
+    parsers.useBodyParser("raw", { limit: "1kb" });
+    parsers.useBodyParser("json", { type: "application/x-custom", limit: 16 });
+    let finished = 0;
+    app.use("/stream", (_req: unknown, res: NativeResponse) => {
+      res.on("finish", () => finished++);
+      res.status(201).setHeader("content-type", "text/plain");
+      res.write("one,");
+      setTimeout(() => {
+        res.write("two,");
+        res.end("three");
+      }, 5);
+    });
+    await app.listen(0, "127.0.0.1");
+    const base = await app.getUrl();
+    const post = (type: string, body: string) =>
+      fetch(`${base}/api/echo`, { method: "POST", headers: { "content-type": type }, body });
+
+    expect(await (await post("text/csv", "a,b")).text()).toBe("a,b");
+    const binary = await post("application/octet-stream", "bytes");
+    expect(binary.headers.get("content-type")).toBe("application/octet-stream");
+    expect(await binary.text()).toBe("bytes");
+    expect((await post("application/octet-stream", "x".repeat(2000))).status).toBe(413);
+    expect(await (await post("application/x-custom", '{"a":1}')).json()).toEqual({ a: 1 });
+    expect((await post("application/x-custom", JSON.stringify({ a: "x".repeat(32) }))).status).toBe(
+      413,
+    );
+    expect(await (await post("application/json", '{"b":2}')).json()).toEqual({ b: 2 });
+
+    const stream = await fetch(`${base}/stream`);
+    expect(stream.status).toBe(201);
+    expect(await stream.text()).toBe("one,two,three");
+    expect((await fetch(`${base}/stream`, { method: "HEAD" })).status).toBe(201);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(finished).toBe(2);
   });
 });

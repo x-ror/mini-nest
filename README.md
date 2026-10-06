@@ -20,17 +20,21 @@ Fastify a benchmark-only one.
 
 ## Compatibility matrix
 
-| Capability                                           | Node adapter  | Bun adapter   | Notes                                                           |
-| ---------------------------------------------------- | ------------- | ------------- | --------------------------------------------------------------- |
-| Nest baseline                                        | Verified      | Verified      | NestJS 12.1.2; other versions are unverified                    |
-| Runtime                                              | Node.js 22+   | Current Bun   | Bun uses `Bun.serve`                                            |
-| Routing, middleware, guards, pipes, interceptors, DI | Supported     | Supported     | Shared adapter implementation                                   |
-| JSON and nested URL-encoded bodies                   | Supported     | Supported     | Parsed body limit defaults to 100 KiB                           |
-| Multipart forms                                      | Supported     | Supported     | Files are native `File` values on `@Body()`                     |
-| CORS and static assets                               | Basic support | Basic support | Not a replacement for dedicated integrations/CDNs               |
-| Nest `@Sse()`                                        | Supported     | Supported     | Observable `MessageEvent` stream; not arbitrary response writes |
-| TLS / HTTPS                                          | Not supported | Not supported | Terminate TLS at a reverse proxy                                |
-| WebSockets, Multer decorators, MVC                   | Not supported | Not supported | Use a different Nest platform adapter if required               |
+| Capability                                           | Node adapter  | Bun adapter   | Notes                                                       |
+| ---------------------------------------------------- | ------------- | ------------- | ----------------------------------------------------------- |
+| Nest baseline                                        | Verified      | Verified      | NestJS 12.1.2; other versions are unverified                |
+| Runtime                                              | Node.js 22+   | Current Bun   | Bun uses `Bun.serve`                                        |
+| Routing, middleware, guards, pipes, interceptors, DI | Supported     | Supported     | Shared adapter implementation                               |
+| JSON and nested URL-encoded bodies                   | Supported     | Supported     | Parsed body limit defaults to 100 KiB                       |
+| Multipart forms                                      | Supported     | Supported     | Files are native `File` values on `@Body()`                 |
+| CORS and static assets                               | Basic support | Basic support | Not a replacement for dedicated integrations/CDNs           |
+| Text, raw and custom-type bodies                     | Supported     | Supported     | Opt in with `app.useBodyParser(...)`                        |
+| Header, media-type and custom versioning             | Supported     | Supported     | Same per-handler matching as Nest's Express adapter         |
+| Nest `@Sse()`                                        | Supported     | Supported     | Observable `MessageEvent` stream                            |
+| Streamed responses with `res.write()`                | Supported     | Supported     | Chunked; headers are sent on the first write                |
+| Response events (`res.on("finish")`)                 | Supported     | Not supported | Forwarded to Node's `ServerResponse`                        |
+| TLS / HTTPS                                          | Supported     | Untested      | Nest `httpsOptions`; Bun reads key, cert, ca and passphrase |
+| WebSockets, Multer decorators, MVC                   | Not supported | Not supported | Use a different Nest platform adapter if required           |
 
 ## Usage
 
@@ -52,13 +56,18 @@ experiment has been retired. Explicit `@Inject()` remains usable.
 ## Current scope
 
 Supported: HTTP routing with `path-to-regexp` 8 syntax, named parameters and
-wildcards, query strings (repeated keys become arrays), global prefixes, URI
-versioning, Nest middleware, JSON, nested URL-encoded and multipart form bodies,
+wildcards, query strings (repeated keys become arrays), global prefixes, URI,
+header, media-type and custom versioning, Nest middleware, JSON, nested URL-encoded and multipart form bodies,
 raw bodies, status/headers/cookies/redirects, HEAD/no-content responses,
 `StreamableFile`, Nest `@Sse()` routes returning Observables, and Nest's standard
 request pipeline. Repeated form fields become arrays, bracket notation creates
 nested objects/arrays, and multipart file fields are exposed as native `File`
 values on `@Body()`. Route matching is case-sensitive.
+
+Text, raw and extra JSON/URL-encoded media types are opt-in:
+`app.useBodyParser("text")`, `app.useBodyParser("raw", { limit: "1mb" })` or
+`app.useBodyParser("json", { type: "application/vnd.api+json" })`. `type` takes
+exact media types, `text/*`-style prefixes or `*/*`.
 
 The default parsed-body limit is 100 KiB; configure `new NodeHttpAdapter({
 bodyLimit: 1024 * 1024 })` or the same option on Bun. `shutdownTimeout` defaults
@@ -66,13 +75,11 @@ to 5000 ms, after which outstanding connections are forcibly closed.
 
 These are **not drop-in Express plugin adapters**. `@Req()` exposes a
 `NativeRequest` with `.raw` (a web `Request`) and Nest's usual data fields.
-`@Res()` exposes `NativeResponse` with `status`, `json`, `send`, `end`,
+`@Res()` exposes `NativeResponse` with `status`, `json`, `send`, `write`, `end`,
 `setHeader`, `getHeader`, and `redirect`, not a Node `ServerResponse`.
 No Express-specific middleware APIs, Multer-compatible file decorators,
-arbitrary direct response writes, WebSocket upgrades, MVC, configurable body
-parsers, HTTPS, or non-URI versioning are provided yet. `@Sse()` streams Nest
-`MessageEvent` values as `text/event-stream`; it is not a general-purpose
-streaming response API. Basic static file serving and CORS are supported through
+WebSocket upgrades, or MVC are provided yet. `@Sse()` streams Nest
+`MessageEvent` values as `text/event-stream`. Basic static file serving and CORS are supported through
 the adapter middleware API with origin/preflight handling. Unsupported adapter
 configuration throws instead of silently doing nothing. Do not assume browser
 cross-origin access is enabled.
@@ -88,19 +95,21 @@ transport-specific code before replacing the platform adapter:
   first access on Node, so only touch it when you need it), not an
   Express `Request`, Fastify request, or Node `IncomingMessage`.
 - Treat `@Res()` as `NativeResponse`. `res.status(...).json(...)` and
-  `res.setHeader(...)` are available, but Express/Fastify APIs, direct Node
-  writes, response events, and plugin-specific methods are not.
+  `res.setHeader(...)`, and `res.write(...)` are available, and on Node
+  `res.on(...)` forwards to the underlying response. Other Express/Fastify
+  APIs and plugin-specific methods are not.
 - Replace Multer `@UploadedFile()` / `@UploadedFiles()` flows with
   `@Body()` multipart fields, where uploaded files are Web `File` objects.
   Uploads are memory-backed and bounded by `bodyLimit`.
 - Register static assets and CORS through the adapter API and test any
   framework-specific options; these implementations intentionally provide a
   smaller feature set than the corresponding Express/Fastify integrations.
-- Terminate HTTPS at a reverse proxy and do not trust forwarded headers unless
-  the application implements a trusted-proxy policy.
+- Pass Nest `httpsOptions` for native HTTPS, or terminate TLS at a reverse
+  proxy. Do not trust forwarded headers unless the application implements a
+  trusted-proxy policy.
 
 If the application depends on WebSockets, Multer decorators, Fastify plugins,
-Express middleware, direct response writes, or Nest MVC, retain the existing
+Express middleware, or Nest MVC, retain the existing
 platform adapter for that application.
 
 Example SSE endpoint:
@@ -123,7 +132,8 @@ export class EventsController {
 
 ### TLS behind a reverse proxy
 
-The adapters serve plain HTTP. Terminate TLS at a reverse proxy such as Nginx,
+The adapters serve HTTPS directly when Nest `httpsOptions` are given (verified
+on Node; untested on Bun). Otherwise terminate TLS at a reverse proxy such as Nginx,
 and keep the application listener reachable only from that proxy (for example,
 bind to `127.0.0.1` or a private container network). Configure the proxy's
 request-body limit to match the adapter's `bodyLimit`; the default parsed-body
@@ -162,14 +172,12 @@ If using the `1m` proxy limit, configure the adapter with
 application-side HTTP connection, not the original client connection. Do not
 use forwarded headers for security decisions unless a trusted-proxy policy is
 implemented by your application. These adapters do not support WebSocket
-upgrades or arbitrary direct response writes, even when the proxy can proxy
-them.
+upgrades, even when the proxy can proxy them.
 
 The Node adapter exposes its real HTTP server through `getHttpServer()`.
 The Bun adapter exposes a small event/address facade for Nest's listen lifecycle,
 with the actual Bun server at `.native`; it is not a Node server or a WebSocket
-adapter. Fetch response streaming is supported for files, but arbitrary Node
-response events and manual `write()` calls are not.
+adapter. Response events are only available on Node.
 
 ### Operational notes
 
