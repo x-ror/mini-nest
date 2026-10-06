@@ -25,15 +25,19 @@
     "@nestjs/core": "catalog:",
     "@nestjs/platform-express": "catalog:",
     "@nestjs/platform-fastify": "catalog:",
+    "@nestjs/platform-ws": "catalog:",
+    "@nestjs/websockets": "catalog:",
     "@types/bun": "catalog:",
     "@types/node": "catalog:",
+    "@types/ws": "catalog:",
     "nestjs-adapter-bun": "workspace:*",
     "nestjs-adapter-node": "workspace:*",
     "path-to-regexp": "catalog:",
     "reflect-metadata": "catalog:",
     "rxjs": "catalog:",
     "typescript": "catalog:",
-    "vite-plus": "catalog:"
+    "vite-plus": "catalog:",
+    "ws": "catalog:"
   },
   "engines": {
     "node": ">=22"

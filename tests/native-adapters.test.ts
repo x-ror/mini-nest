@@ -16,6 +16,9 @@ import {
   type VersioningOptions,
 } from "@nestjs/common";
 import { ExpressAdapter } from "@nestjs/platform-express";
+import { WsAdapter } from "@nestjs/platform-ws";
+import { MessageBody, SubscribeMessage, WebSocketGateway } from "@nestjs/websockets";
+import { WebSocket } from "ws";
 import { NodeHttpAdapter, NativeResponse, type NativeRequest } from "nestjs-adapter-node";
 import { BunHttpAdapter } from "nestjs-adapter-bun";
 import { compareAdapters, startFixture } from "../packages/conformance/src/compare.js";
@@ -36,6 +39,16 @@ class VersionedController {
 }
 @Module({ controllers: [VersionedController] })
 class VersionedModule {}
+
+@WebSocketGateway({ path: "/ws" })
+class EchoGateway {
+  @SubscribeMessage("echo")
+  echo(@MessageBody() data: unknown) {
+    return { event: "echo", data };
+  }
+}
+@Module({ imports: [FixtureModule], providers: [EchoGateway] })
+class GatewayModule {}
 
 const apps: INestApplication[] = [];
 afterEach(async () => {
@@ -385,5 +398,21 @@ describe("native Nest adapters", () => {
     expect((await fetch(`${base}/stream`, { method: "HEAD" })).status).toBe(201);
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(finished).toBe(2);
+  });
+  it("shares its HTTP server with Nest's WebSocket adapter", async () => {
+    const app = await NestFactory.create(GatewayModule, new NodeHttpAdapter(), { logger: false });
+    apps.push(app);
+    app.useWebSocketAdapter(new WsAdapter(app));
+    await app.listen(0, "127.0.0.1");
+    const base = await app.getUrl();
+    const socket = new WebSocket(`${base.replace("http", "ws")}/ws`);
+    const reply = await new Promise<string>((resolve, reject) => {
+      socket.on("open", () => socket.send(JSON.stringify({ event: "echo", data: { n: 1 } })));
+      socket.on("message", (data: Buffer) => resolve(data.toString()));
+      socket.on("error", reject);
+    });
+    socket.close();
+    expect(JSON.parse(reply)).toEqual({ event: "echo", data: { n: 1 } });
+    expect((await fetch(`${base}/api`)).status).toBe(200);
   });
 });

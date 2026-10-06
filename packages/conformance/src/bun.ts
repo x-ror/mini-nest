@@ -1,5 +1,7 @@
 import { ExpressAdapter } from "@nestjs/platform-express";
-import { BunHttpAdapter } from "nestjs-adapter-bun";
+import { Module } from "@nestjs/common";
+import { MessageBody, SubscribeMessage, WebSocketGateway } from "@nestjs/websockets";
+import { BunHttpAdapter, BunWsAdapter } from "nestjs-adapter-bun";
 import assert from "node:assert/strict";
 import { NestFactory } from "@nestjs/core";
 import { compareAdapters, startFixture } from "./compare.js";
@@ -61,6 +63,39 @@ await app.close();
 assert.equal(adapter.getHttpServer().address(), null);
 const fresh = await startFixture(new BunHttpAdapter());
 await fresh.close();
+
+@WebSocketGateway({ path: "/ws" })
+class EchoGateway {
+  @SubscribeMessage("echo")
+  echo(@MessageBody() data: unknown) {
+    return { event: "echo", data };
+  }
+}
+@Module({ imports: [FixtureModule], providers: [EchoGateway] })
+class GatewayModule {}
+
+const realtime = await NestFactory.create(GatewayModule, new BunHttpAdapter(), { logger: false });
+realtime.useWebSocketAdapter(new BunWsAdapter(realtime));
+try {
+  await realtime.listen(0, "127.0.0.1");
+  const base = await realtime.getUrl();
+  const socket = new WebSocket(`${base.replace("http", "ws")}/ws`);
+  const reply = await new Promise<string>((resolve, reject) => {
+    socket.onopen = () => {
+      socket.send("not json");
+      socket.send(JSON.stringify({ event: "unknown" }));
+      socket.send(JSON.stringify({ event: "echo", data: { n: 1 } }));
+    };
+    socket.onmessage = (event) => resolve(String(event.data));
+    socket.onerror = () => reject(new Error("WebSocket connection failed"));
+  });
+  socket.close();
+  assert.deepEqual(JSON.parse(reply), { event: "echo", data: { n: 1 } });
+  assert.equal((await fetch(`${base}/api`)).status, 200);
+  assert.equal((await fetch(`${base}/ws`)).status, 404);
+} finally {
+  await realtime.close();
+}
 console.log(
-  "native-bun: initialization, native server, listen failure, and close lifecycle passed.",
+  "native-bun: initialization, native server, listen failure, WebSockets, and close lifecycle passed.",
 );

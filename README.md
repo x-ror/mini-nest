@@ -34,7 +34,8 @@ Fastify a benchmark-only one.
 | Streamed responses with `res.write()`                | Supported     | Supported     | Chunked; headers are sent on the first write                |
 | Response events (`res.on("finish")`)                 | Supported     | Not supported | Forwarded to Node's `ServerResponse`                        |
 | TLS / HTTPS                                          | Supported     | Untested      | Nest `httpsOptions`; Bun reads key, cert, ca and passphrase |
-| WebSockets, Multer decorators, MVC                   | Not supported | Not supported | Use a different Nest platform adapter if required           |
+| WebSocket gateways                                   | Supported     | Supported     | Node: Nest's `WsAdapter`; Bun: `BunWsAdapter`               |
+| Multer decorators, MVC                               | Not supported | Not supported | Use a different Nest platform adapter if required           |
 
 ## Usage
 
@@ -78,7 +79,7 @@ These are **not drop-in Express plugin adapters**. `@Req()` exposes a
 `@Res()` exposes `NativeResponse` with `status`, `json`, `send`, `write`, `end`,
 `setHeader`, `getHeader`, and `redirect`, not a Node `ServerResponse`.
 No Express-specific middleware APIs, Multer-compatible file decorators,
-WebSocket upgrades, or MVC are provided yet. `@Sse()` streams Nest
+or MVC are provided yet. `@Sse()` streams Nest
 `MessageEvent` values as `text/event-stream`. Basic static file serving and CORS are supported through
 the adapter middleware API with origin/preflight handling. Unsupported adapter
 configuration throws instead of silently doing nothing. Do not assume browser
@@ -108,7 +109,7 @@ transport-specific code before replacing the platform adapter:
   proxy. Do not trust forwarded headers unless the application implements a
   trusted-proxy policy.
 
-If the application depends on WebSockets, Multer decorators, Fastify plugins,
+If the application depends on Multer decorators, Fastify plugins,
 Express middleware, or Nest MVC, retain the existing
 platform adapter for that application.
 
@@ -171,13 +172,36 @@ If using the `1m` proxy limit, configure the adapter with
 `X-Forwarded-*` headers: `@Req().protocol` and `@Req().ip` reflect the
 application-side HTTP connection, not the original client connection. Do not
 use forwarded headers for security decisions unless a trusted-proxy policy is
-implemented by your application. These adapters do not support WebSocket
-upgrades, even when the proxy can proxy them.
+implemented by your application.
 
 The Node adapter exposes its real HTTP server through `getHttpServer()`.
 The Bun adapter exposes a small event/address facade for Nest's listen lifecycle,
-with the actual Bun server at `.native`; it is not a Node server or a WebSocket
-adapter. Response events are only available on Node.
+with the actual Bun server at `.native`; it is not a Node server. Response
+events are only available on Node.
+
+### WebSockets
+
+On Node the adapter's server is a real `http.Server`, so Nest's own adapter
+from `@nestjs/platform-ws` works unchanged:
+
+```ts
+import { WsAdapter } from "@nestjs/platform-ws";
+app.useWebSocketAdapter(new WsAdapter(app));
+```
+
+On Bun use the bundled adapter, which runs on Bun's native WebSockets and
+shares the HTTP port:
+
+```ts
+import { BunHttpAdapter, BunWsAdapter } from "nestjs-adapter-bun";
+const app = await NestFactory.create(AppModule, new BunHttpAdapter());
+app.useWebSocketAdapter(new BunWsAdapter(app));
+```
+
+`BunWsAdapter` uses the same `{ "event": ..., "data": ... }` JSON messages as
+`WsAdapter`. Gateways are matched by `@WebSocketGateway({ path })`; separate
+ports and namespaces are not supported, and `@ConnectedSocket()` is Bun's
+`ServerWebSocket`. Both need `@nestjs/websockets` installed in the application.
 
 ### Operational notes
 
