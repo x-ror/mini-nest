@@ -20,7 +20,7 @@ export {
   NativeResponse,
 } from "@shared";
 
-export type { NativeAdapterOptions, NativeRequest, UploadedFileData } from "@shared";
+export type { NativeAdapterOptions, NativeRequest, UploadedFileData, ViewRenderer } from "@shared";
 
 const EMPTY_BODY = Buffer.alloc(0);
 

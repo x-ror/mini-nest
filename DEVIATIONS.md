@@ -10,7 +10,7 @@ history, not active workspace packages.
 - Bun uses `Bun.serve`, not `node:http` running under Bun. Its native server is
   wrapped only for Nest's event/address listen contract.
 - Requests and responses use the supported fields/APIs documented in README.
-  Express plugins, Multer options beyond memory storage, MVC, WebSocket namespaces, and response
+  Express plugins, Multer options beyond memory storage, WebSocket namespaces, and response
   events on Bun remain outside the implementation. Nest `@Sse()` Observable
   routes, `res.write()` streaming, opt-in text/raw body parsers, all Nest
   versioning types, and native HTTPS via `httpsOptions` (untested on Bun) are

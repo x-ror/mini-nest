@@ -37,7 +37,7 @@ Fastify a benchmark-only one.
 | WebSocket gateways                                   | Supported     | Supported     | Node: Nest's `WsAdapter`; Bun: `BunWsAdapter`               |
 | Socket.IO gateways                                   | Supported     | Not supported | Automatic on Node; under Bun use the Node adapter           |
 | File upload interceptors                             | Supported     | Supported     | `FileInterceptor` and friends; memory storage only          |
-| MVC                                                  | Not supported | Not supported | Use a different Nest platform adapter if required           |
+| MVC (`@Render()`)                                    | Supported     | Supported     | Express-compatible engines (`ejs`, `pug`, `hbs`)            |
 
 ## Usage
 
@@ -80,7 +80,11 @@ These are **not drop-in Express plugin adapters**. `@Req()` exposes a
 `NativeRequest` with `.raw` (a web `Request`) and Nest's usual data fields.
 `@Res()` exposes `NativeResponse` with `status`, `json`, `send`, `write`, `end`,
 `setHeader`, `getHeader`, and `redirect`, not a Node `ServerResponse`.
-No Express-specific middleware APIs or MVC are provided yet. `@Sse()` streams Nest
+No Express-specific middleware APIs are provided. `@Render()` works with
+Express-compatible view engines: `app.setBaseViewsDir(dir)` (default `./views`)
+and `app.setViewEngine("ejs")`, or pass `{ extension, render }` with any
+`(path, options, callback)` function. Express `app.locals` and view caching
+settings are not provided. `@Sse()` streams Nest
 `MessageEvent` values as `text/event-stream`. Basic static file serving and CORS are supported through
 the adapter middleware API with origin/preflight handling. Unsupported adapter
 configuration throws instead of silently doing nothing. Do not assume browser
@@ -116,7 +120,7 @@ transport-specific code before replacing the platform adapter:
   trusted-proxy policy.
 
 If the application depends on Multer disk storage, Fastify plugins,
-Express middleware, or Nest MVC, retain the existing
+Express middleware, retain the existing
 platform adapter for that application.
 
 Example SSE endpoint:

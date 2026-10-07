@@ -1,4 +1,6 @@
+import { existsSync } from "node:fs";
 import { readFile, stat } from "node:fs/promises";
+import { createRequire } from "node:module";
 import { extname, relative, resolve } from "node:path";
 import { AbstractHttpAdapter } from "@nestjs/core";
 import { LegacyRouteConverter } from "@nestjs/core/internal";
@@ -40,6 +42,12 @@ export interface NativeAdapterOptions {
   uploadLimit?: number;
   shutdownTimeout?: number;
 }
+/** Express's view engine signature: `(path, options, callback)`. */
+export type ViewRenderer = (
+  path: string,
+  options: object,
+  callback: (error: unknown, html?: string) => void,
+) => void;
 type VersionValue = Parameters<AbstractHttpAdapter["applyVersionFilter"]>[1];
 type ErrorHandler = (
   error: unknown,
@@ -61,6 +69,8 @@ export abstract class NativeHttpAdapter<TServer> extends AbstractHttpAdapter<
       message: `Cannot ${req.method} ${req.url}`,
       error: "Not Found",
     });
+  private viewsDirs = [resolve("views")];
+  private viewEngine?: { extension: string; render?: ViewRenderer };
   private shuttingDown = false;
   private return503OnClosing = false;
 
@@ -410,14 +420,47 @@ export abstract class NativeHttpAdapter<TServer> extends AbstractHttpAdapter<
     });
     return this;
   }
-  setBaseViewsDir(): never {
-    throw new Error("MVC rendering is not supported by native adapters.");
+  setBaseViewsDir(path: string | string[]): this {
+    this.viewsDirs = ([] as string[]).concat(path);
+    return this;
   }
-  setViewEngine(): never {
-    throw new Error("MVC rendering is not supported by native adapters.");
+  /**
+   * Takes an Express-compatible engine: a module name such as "ejs", "pug" or
+   * "hbs" (anything exporting `__express`), or the extension and function itself.
+   */
+  setViewEngine(engine: string | { extension: string; render: ViewRenderer }): this {
+    this.viewEngine = typeof engine === "string" ? { extension: engine } : { ...engine };
+    return this;
   }
-  render(): never {
-    throw new Error("MVC rendering is not supported by native adapters.");
+  async render(response: NativeResponse, view: string, options: unknown): Promise<void> {
+    const engine = this.viewEngine;
+    if (!engine) throw new Error("No view engine is set; call app.setViewEngine(...) first.");
+    const name = extname(view) ? view : `${view}.${engine.extension}`;
+    const file = this.viewsDirs.map((dir) => resolve(dir, name)).find((path) => existsSync(path));
+    if (!file) throw new Error(`Failed to lookup view "${view}" in ${this.viewsDirs.join(", ")}`);
+    engine.render ??= this.loadViewEngine(engine.extension);
+    const html = await new Promise<string>((done, fail) =>
+      engine.render!(file, (options ?? {}) as object, (error, output) =>
+        error ? fail(error) : done(output ?? ""),
+      ),
+    );
+    response.send(html);
+  }
+  // Engines belong to the application, so they are resolved from its views and
+  // working directories rather than from this package.
+  private loadViewEngine(name: string): ViewRenderer {
+    for (const dir of [...this.viewsDirs, process.cwd()]) {
+      let loaded: { __express?: ViewRenderer; default?: { __express?: ViewRenderer } };
+      try {
+        loaded = createRequire(resolve(dir, "views.js"))(name);
+      } catch {
+        continue;
+      }
+      const renderer = loaded.__express ?? loaded.default?.__express;
+      if (renderer) return renderer;
+      throw new Error(`Module "${name}" does not provide an Express view engine (__express).`);
+    }
+    throw new Error(`View engine "${name}" is not installed.`);
   }
   applyVersionFilter(
     handler: Function,

@@ -11,6 +11,7 @@ import {
   Get,
   Module,
   Post,
+  Render,
   UploadedFile,
   UploadedFiles,
   UseInterceptors,
@@ -107,6 +108,22 @@ function uploadModule(interceptors: {
   class UploadModule {}
   return UploadModule;
 }
+
+@Controller("pages")
+class PagesController {
+  @Get("hello")
+  @Render("hello")
+  hello() {
+    return { name: "Ada" };
+  }
+  @Get("missing")
+  @Render("missing")
+  missing() {
+    return {};
+  }
+}
+@Module({ controllers: [PagesController] })
+class PagesModule {}
 
 const apps: INestApplication[] = [];
 afterEach(async () => {
@@ -251,7 +268,6 @@ describe("native Nest adapters", () => {
       allowedHeaders: ["content-type", "x-auth"],
     });
     expect(() => adapter.useBodyParser("xml" as "json")).toThrow("Unsupported body parser");
-    expect(() => adapter.render()).toThrow("MVC");
     expect(() => new BunHttpAdapter().initHttpServer({})).toThrow("Bun runtime");
     expect(() => new NodeHttpAdapter({ bodyLimit: -1 })).toThrow("bodyLimit");
     expect(() => new NodeHttpAdapter({ shutdownTimeout: -1 })).toThrow("shutdownTimeout");
@@ -559,6 +575,56 @@ describe("native Nest adapters", () => {
         }),
       );
       expect(actual).toEqual(expected);
+    }
+  });
+  it("renders views with Express-compatible engines", async () => {
+    const dir = join(process.cwd(), ".tmp-views");
+    await mkdir(join(dir, "node_modules", "tiny-engine"), { recursive: true });
+    try {
+      // A stand-in for ejs/pug/hbs: any module exporting Express's `__express`.
+      await writeFile(
+        join(dir, "node_modules", "tiny-engine", "index.js"),
+        `const { readFile } = require("node:fs");
+         exports.__express = (path, options, done) =>
+           readFile(path, "utf8", (error, text) =>
+             done(error, text && text.replace(/{{(\\w+)}}/g, (_, key) => options[key])));`,
+      );
+      await writeFile(join(dir, "hello.tiny-engine"), "<h1>Hello {{name}}</h1>");
+      await writeFile(join(dir, "hello.txt"), "Hi {{name}}");
+      type Views = { setBaseViewsDir(dir: string): void; setViewEngine(engine: unknown): void };
+
+      const byName = await NestFactory.create(PagesModule, new NodeHttpAdapter(), {
+        logger: false,
+      });
+      apps.push(byName);
+      (byName as unknown as Views).setBaseViewsDir(dir);
+      (byName as unknown as Views).setViewEngine("tiny-engine");
+      await byName.listen(0, "127.0.0.1");
+      const page = await fetch(`${await byName.getUrl()}/pages/hello`);
+      expect(page.headers.get("content-type")).toBe("text/html; charset=utf-8");
+      expect(await page.text()).toBe("<h1>Hello Ada</h1>");
+      expect((await fetch(`${await byName.getUrl()}/pages/missing`)).status).toBe(500);
+
+      const byFunction = await NestFactory.create(PagesModule, new NodeHttpAdapter(), {
+        logger: false,
+      });
+      apps.push(byFunction);
+      (byFunction as unknown as Views).setBaseViewsDir(dir);
+      (byFunction as unknown as Views).setViewEngine({
+        extension: "txt",
+        render: (
+          path: string,
+          options: { name: string },
+          done: (e: unknown, html: string) => void,
+        ) =>
+          void readFile(path, "utf8").then((text) =>
+            done(null, text.replace("{{name}}", options.name)),
+          ),
+      });
+      await byFunction.listen(0, "127.0.0.1");
+      expect(await (await fetch(`${await byFunction.getUrl()}/pages/hello`)).text()).toBe("Hi Ada");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
     }
   });
 });

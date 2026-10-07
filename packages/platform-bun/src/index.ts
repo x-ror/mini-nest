@@ -15,7 +15,7 @@ export {
   NativeResponse,
 } from "@shared";
 
-export type { NativeAdapterOptions, NativeRequest, UploadedFileData } from "@shared";
+export type { NativeAdapterOptions, NativeRequest, UploadedFileData, ViewRenderer } from "@shared";
 
 const OWNER = Symbol("socketTransport");
 type AnySocket = Bun.ServerWebSocket<any>;
