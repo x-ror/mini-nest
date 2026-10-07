@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { readFile, stat } from "node:fs/promises";
 import { createRequire } from "node:module";
-import { extname, relative, resolve } from "node:path";
+import { extname, isAbsolute, relative, resolve, sep } from "node:path";
 import { AbstractHttpAdapter } from "@nestjs/core";
 import { LegacyRouteConverter } from "@nestjs/core/internal";
 import {
@@ -318,20 +318,39 @@ export abstract class NativeHttpAdapter<TServer> extends AbstractHttpAdapter<
     const credentials = options.credentials === true || options.allowCredentials === true;
     const maxAge = options.maxAge;
 
-    const resolveOrigin = (requestOrigin?: string): string => {
-      if (requestOrigin === undefined) return originOption === true ? "*" : "*";
+    const matches = (entry: unknown, origin: string): boolean =>
+      entry instanceof RegExp ? entry.test(origin) : entry === origin;
+    // Mirrors expressjs/cors: returns the ACAO value, or undefined to omit the header.
+    const resolveOrigin = async (requestOrigin?: string): Promise<string | undefined> => {
+      if (originOption === false) return undefined;
       if (originOption === true || originOption === "*") return "*";
       if (typeof originOption === "string") return originOption;
-      if (Array.isArray(originOption))
-        return originOption.includes(requestOrigin) ? requestOrigin : "*";
-      if (typeof originOption === "function") return String(originOption(requestOrigin));
-      return requestOrigin;
+      if (requestOrigin === undefined) return undefined;
+      if (originOption instanceof RegExp || Array.isArray(originOption)) {
+        const entries = Array.isArray(originOption) ? originOption : [originOption];
+        return entries.some((entry) => matches(entry, requestOrigin)) ? requestOrigin : undefined;
+      }
+      if (typeof originOption === "function") {
+        const allowed = await new Promise<unknown>((resolveAllowed, reject) => {
+          originOption(requestOrigin, (err: unknown, allow: unknown) =>
+            err ? reject(err) : resolveAllowed(allow),
+          );
+        });
+        if (allowed === true) return requestOrigin;
+        if (typeof allowed === "string") return allowed;
+        if (allowed instanceof RegExp || Array.isArray(allowed)) {
+          const entries = Array.isArray(allowed) ? allowed : [allowed];
+          return entries.some((entry) => matches(entry, requestOrigin)) ? requestOrigin : undefined;
+        }
+        return undefined;
+      }
+      return undefined;
     };
 
-    this.use((req, res, next) => {
+    this.use(async (req, res, next) => {
       const requestOrigin = typeof req.headers.origin === "string" ? req.headers.origin : undefined;
-      const allowOrigin = resolveOrigin(requestOrigin);
-      if (requestOrigin) res.setHeader("vary", "Origin");
+      const allowOrigin = await resolveOrigin(requestOrigin);
+      if (originOption !== "*" && originOption !== true) res.setHeader("vary", "Origin");
       if (allowOrigin) res.setHeader("access-control-allow-origin", allowOrigin);
       if (credentials) res.setHeader("access-control-allow-credentials", "true");
       if (exposedHeaders.length) {
@@ -342,6 +361,7 @@ export abstract class NativeHttpAdapter<TServer> extends AbstractHttpAdapter<
         typeof req.headers["access-control-request-method"] === "string";
       if (isPreflight) {
         const requestedHeaders =
+          !Array.isArray(options.allowedHeaders) &&
           typeof req.headers["access-control-request-headers"] === "string"
             ? req.headers["access-control-request-headers"]
             : allowedHeaders.join(", ");
@@ -402,7 +422,14 @@ export abstract class NativeHttpAdapter<TServer> extends AbstractHttpAdapter<
       const safePath = rawPath === "/" ? indexName : rawPath.replace(/^\/+/, "");
       const targetPath = resolve(rootPath, safePath);
       const relativeToRoot = relative(rootPath, targetPath);
-      if (relativeToRoot.startsWith("..") || relativeToRoot === "..") return next();
+      if (
+        isAbsolute(safePath) ||
+        isAbsolute(relativeToRoot) ||
+        relativeToRoot === ".." ||
+        relativeToRoot.startsWith(`..${sep}`) ||
+        !(targetPath === rootPath || targetPath.startsWith(rootPath + sep))
+      )
+        return next();
       try {
         const stats = await stat(targetPath);
         const filePath = stats.isDirectory() ? resolve(targetPath, indexName) : targetPath;

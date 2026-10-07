@@ -308,6 +308,58 @@ describe("native Nest adapters", () => {
       await rm(staticDir, { recursive: true, force: true });
     }
   });
+  it("fails closed for CORS allowlists and rejects absolute static paths", async () => {
+    const adapter = new NodeHttpAdapter();
+    adapter.enableCors({
+      origin: [/^https:\/\/.*\.trusted\.example$/, "https://exact.example"],
+      credentials: true,
+    });
+    const app = await NestFactory.create(FixtureModule, adapter, { logger: false });
+    apps.push(app);
+    const staticDir = join(process.cwd(), "tmp-static-cors");
+    try {
+      await mkdir(staticDir, { recursive: true });
+      await writeFile(join(staticDir, "index.html"), "<h1>hello</h1>");
+      adapter.useStaticAssets(staticDir, { prefix: "/assets" });
+      await app.listen(0, "127.0.0.1");
+      const base = await app.getUrl();
+      const evil = await fetch(`${base}/api`, { headers: { origin: "https://evil.example" } });
+      expect(evil.headers.get("access-control-allow-origin")).toBeNull();
+      expect(evil.headers.get("vary")).toBe("Origin");
+      const regexHit = await fetch(`${base}/api`, {
+        headers: { origin: "https://app.trusted.example" },
+      });
+      expect(regexHit.headers.get("access-control-allow-origin")).toBe(
+        "https://app.trusted.example",
+      );
+      const exactHit = await fetch(`${base}/api`, { headers: { origin: "https://exact.example" } });
+      expect(exactHit.headers.get("access-control-allow-origin")).toBe("https://exact.example");
+      const escape = await fetch(`${base}/assets/${encodeURIComponent("C:")}/Windows/win.ini`);
+      expect(escape.status).toBe(404);
+      const escapeRaw = await fetch(`${base}/assets/D:/secrets/file`);
+      expect(escapeRaw.status).toBe(404);
+    } finally {
+      await rm(staticDir, { recursive: true, force: true });
+    }
+
+    const callbackAdapter = new NodeHttpAdapter();
+    callbackAdapter.enableCors({
+      origin: (origin: string, cb: (err: Error | null, allow?: boolean) => void) =>
+        cb(null, origin === "https://cb.example"),
+    });
+    const callbackApp = await NestFactory.create(FixtureModule, callbackAdapter, { logger: false });
+    apps.push(callbackApp);
+    await callbackApp.listen(0, "127.0.0.1");
+    const callbackBase = await callbackApp.getUrl();
+    const allowed = await fetch(`${callbackBase}/api`, {
+      headers: { origin: "https://cb.example" },
+    });
+    expect(allowed.headers.get("access-control-allow-origin")).toBe("https://cb.example");
+    const denied = await fetch(`${callbackBase}/api`, {
+      headers: { origin: "https://no.example" },
+    });
+    expect(denied.headers.get("access-control-allow-origin")).toBeNull();
+  });
   it("preserves multiple cookies and omits bodies for HEAD and 204", async () => {
     const adapter = new NodeHttpAdapter();
     const response = new NativeResponse("GET");
