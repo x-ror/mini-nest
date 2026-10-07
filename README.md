@@ -35,7 +35,7 @@ Fastify a benchmark-only one.
 | Response events (`res.on("finish")`)                 | Supported     | Not supported | Forwarded to Node's `ServerResponse`                        |
 | TLS / HTTPS                                          | Supported     | Untested      | Nest `httpsOptions`; Bun reads key, cert, ca and passphrase |
 | WebSocket gateways                                   | Supported     | Supported     | Node: Nest's `WsAdapter`; Bun: `BunWsAdapter`               |
-| Socket.IO gateways                                   | Supported     | Supported     | Node: automatic; Bun: `BunIoAdapter`                        |
+| Socket.IO gateways                                   | Supported     | Not supported | Automatic on Node; under Bun use the Node adapter           |
 | Multer decorators, MVC                               | Not supported | Not supported | Use a different Nest platform adapter if required           |
 
 ## Usage
@@ -206,25 +206,15 @@ ports and namespaces are not supported, and `@ConnectedSocket()` is Bun's
 
 ### Socket.IO
 
-On Node nothing is needed beyond installing `@nestjs/platform-socket.io`: Nest
-attaches Socket.IO to the adapter's `http.Server` by itself, as it does with
-Express.
+With `NodeHttpAdapter` nothing is needed beyond installing
+`@nestjs/platform-socket.io`: Nest attaches Socket.IO to the adapter's
+`http.Server` by itself, as it does with Express. This also holds when the
+application runs under Bun, so `NodeHttpAdapter` is the way to use Socket.IO
+on the Bun runtime.
 
-On Bun, Socket.IO runs on its official Bun engine and shares the HTTP port.
-Install `@nestjs/platform-socket.io`, `socket.io` and `@socket.io/bun-engine`,
-then add one line:
-
-```ts
-import { BunHttpAdapter } from "nestjs-adapter-bun";
-import { BunIoAdapter } from "nestjs-adapter-bun/socket.io";
-
-const app = await NestFactory.create(AppModule, new BunHttpAdapter());
-app.useWebSocketAdapter(new BunIoAdapter(app));
-```
-
-Gateways, namespaces, rooms and the browser client are plain Socket.IO and need
-no changes; `/socket.io/socket.io.js` is served as on Node. Nest cannot pick
-this adapter automatically, because its default one requires a Node HTTP server.
+`BunHttpAdapter` does not support Socket.IO or `@nestjs/platform-ws`: both need
+a Node HTTP server, which `Bun.serve` does not provide. Starting such an
+application fails with an error that says so, rather than serving 404s.
 
 All WebSocket integrations need `@nestjs/websockets` installed in the application.
 Other integrations can share the Bun server through

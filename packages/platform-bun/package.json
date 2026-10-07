@@ -9,36 +9,13 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
-    },
-    "./socket.io": {
-      "types": "./dist/socket.io.d.ts",
-      "import": "./dist/socket.io.js"
     }
   },
   "dependencies": {
     "path-to-regexp": "catalog:"
   },
-  "devDependencies": {
-    "@nestjs/platform-socket.io": "catalog:",
-    "@socket.io/bun-engine": "catalog:",
-    "socket.io": "catalog:"
-  },
   "peerDependencies": {
     "@nestjs/common": "catalog:nest-peers",
-    "@nestjs/core": "catalog:nest-peers",
-    "@nestjs/platform-socket.io": "catalog:nest-peers",
-    "@socket.io/bun-engine": "^0.1.2",
-    "socket.io": "^4.8.0"
-  },
-  "peerDependenciesMeta": {
-    "@nestjs/platform-socket.io": {
-      "optional": true
-    },
-    "@socket.io/bun-engine": {
-      "optional": true
-    },
-    "socket.io": {
-      "optional": true
-    }
+    "@nestjs/core": "catalog:nest-peers"
   }
 }

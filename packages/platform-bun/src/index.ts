@@ -12,7 +12,7 @@ type AnySocket = Bun.ServerWebSocket<any>;
 
 /**
  * A WebSocket integration that shares the adapter's `Bun.serve` instance, such
- * as `BunWsAdapter` or Socket.IO's Bun engine.
+ * as `BunWsAdapter`.
  */
 export interface BunSocketTransport {
   /**
@@ -66,7 +66,10 @@ export class BunWsAdapter implements WebSocketAdapter<BunWsGateway, BunSocket> {
   private readonly sockets = new WeakMap<BunSocket, SocketState>();
   constructor(app: { getHttpAdapter(): unknown }) {
     const sockets = this.sockets;
-    bunAdapterOf(app, "BunWsAdapter").addSocketTransport({
+    const adapter = app.getHttpAdapter();
+    if (!(adapter instanceof BunHttpAdapter))
+      throw new Error("BunWsAdapter requires an application created with BunHttpAdapter.");
+    adapter.addSocketTransport({
       handle: (request, pathname, server) => {
         const gateway = this.gateways.get(pathname);
         if (!gateway || request.headers.get("upgrade")?.toLowerCase() !== "websocket") return null;
@@ -149,16 +152,30 @@ export class BunWsAdapter implements WebSocketAdapter<BunWsGateway, BunSocket> {
   dispose(): void {}
 }
 
-/** Returns the application's `BunHttpAdapter`, for WebSocket integrations. */
-export function bunAdapterOf(app: { getHttpAdapter(): unknown }, user: string): BunHttpAdapter {
-  const adapter = app.getHttpAdapter();
-  if (!(adapter instanceof BunHttpAdapter))
-    throw new Error(`${user} requires an application created with BunHttpAdapter.`);
-  return adapter;
-}
+const NODE_SERVER_REQUIRED =
+  "BunHttpAdapter serves through Bun.serve, which has no Node 'request' or 'upgrade' events. " +
+  "Socket.IO and @nestjs/platform-ws need a Node HTTP server: use NodeHttpAdapter (it also runs " +
+  "under Bun), or BunWsAdapter for plain WebSockets on BunHttpAdapter.";
 
 export class BunServerFacade extends EventEmitter {
   native?: Bun.Server<any>;
+  // Integrations that hook a Node server would otherwise attach here and never
+  // receive anything, so they fail at startup instead.
+  private guard(event: string | symbol): void {
+    if (event === "request" || event === "upgrade") throw new Error(NODE_SERVER_REQUIRED);
+  }
+  override on(event: string | symbol, listener: (...args: any[]) => void): this {
+    this.guard(event);
+    return super.on(event, listener);
+  }
+  override addListener(event: string | symbol, listener: (...args: any[]) => void): this {
+    this.guard(event);
+    return super.addListener(event, listener);
+  }
+  /** Present only so Socket.IO treats this as a server and reaches the guard above. */
+  listen(): never {
+    throw new Error(NODE_SERVER_REQUIRED);
+  }
   get listening(): boolean {
     return this.native !== undefined;
   }

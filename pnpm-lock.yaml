@@ -27,9 +27,6 @@ catalogs:
     '@nestjs/websockets':
       specifier: 12.1.2
       version: 12.1.2
-    '@socket.io/bun-engine':
-      specifier: 0.1.2
-      version: 0.1.2
     '@types/bun':
       specifier: 1.4.2
       version: 1.4.2
@@ -48,9 +45,6 @@ catalogs:
     rxjs:
       specifier: 7.8.2
       version: 7.8.2
-    socket.io:
-      specifier: 4.8.3
-      version: 4.8.3
     socket.io-client:
       specifier: ^4.8.3
       version: 4.8.4
@@ -100,9 +94,6 @@ importers:
       '@nestjs/websockets':
         specifier: 'catalog:'
         version: 12.1.2(@nestjs/common@12.1.2(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.1.2)(@nestjs/platform-socket.io@12.1.2)(reflect-metadata@0.2.2)(rxjs@7.8.2)
-      '@socket.io/bun-engine':
-        specifier: 'catalog:'
-        version: 0.1.2(typescript@7.0.2)
       '@types/bun':
         specifier: 'catalog:'
         version: 1.4.2
@@ -127,9 +118,6 @@ importers:
       rxjs:
         specifier: 'catalog:'
         version: 7.8.2
-      socket.io:
-        specifier: 'catalog:'
-        version: 4.8.3
       socket.io-client:
         specifier: 'catalog:'
         version: 4.8.4
@@ -163,9 +151,6 @@ importers:
       '@nestjs/websockets':
         specifier: 'catalog:'
         version: 12.1.2(@nestjs/common@12.1.2(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@12.1.2)(@nestjs/platform-socket.io@12.1.2)(reflect-metadata@0.2.2)(rxjs@7.8.2)
-      '@socket.io/bun-engine':
-        specifier: 'catalog:'
-        version: 0.1.2(typescript@7.0.2)
       nestjs-adapter-bun:
         specifier: workspace:*
         version: link:../platform-bun
@@ -178,9 +163,6 @@ importers:
       rxjs:
         specifier: 'catalog:'
         version: 7.8.2
-      socket.io:
-        specifier: 'catalog:'
-        version: 4.8.3
       socket.io-client:
         specifier: 'catalog:'
         version: 4.8.4
@@ -196,16 +178,6 @@ importers:
       path-to-regexp:
         specifier: 'catalog:'
         version: 8.4.2
-    devDependencies:
-      '@nestjs/platform-socket.io':
-        specifier: 'catalog:'
-        version: 12.1.2(@nestjs/common@12.1.2(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/websockets@12.1.2)(rxjs@7.8.2)
-      '@socket.io/bun-engine':
-        specifier: 'catalog:'
-        version: 0.1.2(typescript@7.0.2)
-      socket.io:
-        specifier: 'catalog:'
-        version: 4.8.3
 
   packages/platform-node:
     dependencies:
@@ -633,11 +605,6 @@ packages:
 
   '@polka/url@1.0.0-next.29':
     resolution: {integrity: sha512-wwQAWhWSuHaag8c4q/KN/vCoeOJYshAIvMQwD4GpSb3OiZklFfvAgmj0VCBBImRpuF/aFgIRzllXlVX93Jevww==}
-
-  '@socket.io/bun-engine@0.1.2':
-    resolution: {integrity: sha512-rp0sDPtBBd/OS+6GXcL+QG2p3t54FCPQKqMQR2hMpL5FOyC4OAm97tTy9Haano+vnkRuwBmUAlhJeijw83/hmA==}
-    peerDependencies:
-      typescript: '*'
 
   '@socket.io/component-emitter@3.1.2':
     resolution: {integrity: sha512-9BCxFwvbGg/RsZK9tjXd8s4UcwR0MWeFQ1XEKIQVVvAGJyINdrqKMcTRyLoK8Rse1GjzLV9cwjWV1olXRWEXVA==}
@@ -2278,10 +2245,6 @@ snapshots:
   '@pinojs/redact@0.4.0': {}
 
   '@polka/url@1.0.0-next.29': {}
-
-  '@socket.io/bun-engine@0.1.2(typescript@7.0.2)':
-    dependencies:
-      typescript: 7.0.2
 
   '@socket.io/component-emitter@3.1.2': {}
 
