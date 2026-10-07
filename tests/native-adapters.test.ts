@@ -372,6 +372,13 @@ describe("native Nest adapters", () => {
     const empty = new NativeResponse("GET").status(204).send("ignored");
     expect(await (await empty.done).text()).toBe("");
   });
+  it("supports hasHeader and removeHeader for Express-style middleware such as helmet", () => {
+    const response = new NativeResponse("GET").setHeader("X-Powered-By", "x");
+    expect(response.hasHeader("x-powered-by")).toBe(true);
+    response.removeHeader("X-POWERED-BY");
+    expect(response.hasHeader("x-powered-by")).toBe(false);
+    expect(response.getHeader("x-powered-by")).toBeUndefined();
+  });
   it("parses query strings into prototype-free objects", async () => {
     const adapter = new NodeHttpAdapter();
     let query: unknown;

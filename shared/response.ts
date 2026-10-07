@@ -76,6 +76,12 @@ export class NativeResponse {
     if (key === "set-cookie") return value === undefined ? [] : ([] as string[]).concat(value);
     return Array.isArray(value) ? value.join(", ") : value;
   }
+  hasHeader(name: string): boolean {
+    return this.headerValues[name.toLowerCase()] !== undefined;
+  }
+  removeHeader(name: string): void {
+    delete this.headerValues[name.toLowerCase()];
+  }
   getHeaders(): Record<string, string | string[]> {
     return { ...this.headerValues };
   }
