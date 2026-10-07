@@ -1,7 +1,11 @@
 import { EventEmitter } from "node:events";
 import type { AddressInfo } from "node:net";
-import type { NestApplicationOptions, WebSocketAdapter } from "@nestjs/common";
-import { NativeHttpAdapter } from "@shared";
+import {
+  PayloadTooLargeException,
+  type NestApplicationOptions,
+  type WebSocketAdapter,
+} from "@nestjs/common";
+import { NativeHttpAdapter, type NativeRequest } from "@shared";
 
 export { NativeResponse } from "@shared";
 
@@ -289,6 +293,17 @@ export class BunHttpAdapter extends NativeHttpAdapter<BunServerFacade> {
       clearTimeout(timer);
       this.httpServer.native = undefined;
     }
+  }
+  // Bun reads a whole body natively far faster than a stream reader loop; the
+  // declared length lets the limit be enforced up front.
+  protected override readBody(
+    request: NativeRequest,
+    limit: number,
+  ): Promise<Buffer> | Buffer | null {
+    const declared = request.headers["content-length"];
+    if (declared === undefined || !request.raw.body) return super.readBody(request, limit);
+    if (Number(declared) > limit) return Promise.reject(new PayloadTooLargeException());
+    return request.raw.arrayBuffer().then((bytes) => Buffer.from(bytes));
   }
   getType(): string {
     return "native-bun";

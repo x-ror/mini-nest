@@ -250,7 +250,8 @@ clients, uploads, static-file workloads, SSE, or reverse-proxy overhead:
 pnpm bench          # NodeHttpAdapter on Node
 pnpm bench:express  # Nest/Express on Node
 pnpm bench:fastify  # Nest/Fastify on Node
-pnpm bench:bun      # BunHttpAdapter on Bun
+pnpm bench:bun               # BunHttpAdapter on Bun, Node load generators
+pnpm bench:bun-node-adapter  # NodeHttpAdapter on Bun, Node load generators
 ```
 
 The defaults are three runs, each with 2 seconds of warmup, 10 seconds of

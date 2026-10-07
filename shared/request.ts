@@ -140,6 +140,12 @@ function nestedFormObject(
   return result;
 }
 
+// Bun's native `Headers#toJSON` is several times cheaper than iterating entries.
+function headersObject(headers: Headers): Record<string, string> {
+  const native = headers as Headers & { toJSON?: () => Record<string, string> };
+  return native.toJSON ? native.toJSON() : Object.fromEntries(headers);
+}
+
 export function createRequest(raw: Request, ip?: string): NativeRequest {
   // `Request.url` is already an absolute, normalized URL; slicing avoids a reparse.
   const full = raw.url;
@@ -158,7 +164,7 @@ export function createRequest(raw: Request, ip?: string): NativeRequest {
       .slice(hostStart, pathStart === -1 ? undefined : pathStart)
       .replace(/^.*@|:\d*$/g, ""),
     protocol: full.slice(0, hostStart - 3),
-    headers: Object.fromEntries(raw.headers),
+    headers: headersObject(raw.headers),
     params: new NullObject(),
     query: queryStart === -1 ? new NullObject() : parseQuery(url.slice(queryStart + 1)),
   };

@@ -39,8 +39,12 @@ if (
 if (!["json", "route", "post", "mixed"].includes(workload)) {
   throw new Error("BENCH_WORKLOAD must be json, route, post, or mixed.");
 }
-if (mode === "bun" && bunVersion === undefined) throw new Error("Run Bun benchmarks with Bun.");
-if (mode === "node" && bunVersion !== undefined) throw new Error("Run Node benchmarks with Node.");
+// Load generators may run on another runtime (BENCH_CLIENT_EXEC) than the server.
+if (!clientMode) {
+  if (mode === "bun" && bunVersion === undefined) throw new Error("Run Bun benchmarks with Bun.");
+  if (mode === "node" && bunVersion !== undefined && !process.env.BENCH_NODE_ADAPTER_ON_BUN)
+    throw new Error("Run Node benchmarks with Node, or set BENCH_NODE_ADAPTER_ON_BUN=1.");
+}
 
 type WorkloadRequest = { path: string; init?: RequestInit; expectedStatus: number };
 const workloadRequests: WorkloadRequest[] = [
@@ -294,14 +298,18 @@ if (serverMode) {
           Math.floor(concurrency / clientProcesses) +
           (index < concurrency % clientProcesses ? 1 : 0);
         if (clientConcurrency === 0) return null;
-        const child = spawn(process.execPath, [process.argv[1]!, mode, "--client"], {
-          stdio: ["pipe", "pipe", "inherit"],
-          env: {
-            ...process.env,
-            BENCH_BASE_URL: baseUrl,
-            BENCH_CLIENT_CONCURRENCY: String(clientConcurrency),
+        const child = spawn(
+          process.env.BENCH_CLIENT_EXEC ?? process.execPath,
+          [process.argv[1]!, mode, "--client"],
+          {
+            stdio: ["pipe", "pipe", "inherit"],
+            env: {
+              ...process.env,
+              BENCH_BASE_URL: baseUrl,
+              BENCH_CLIENT_CONCURRENCY: String(clientConcurrency),
+            },
           },
-        });
+        );
         const lines = createInterface({ input: child.stdout });
         let resolveReady!: () => void;
         let rejectReady!: (error: Error) => void;

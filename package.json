@@ -18,7 +18,8 @@
     "bench": "vp pack && node packages/conformance/dist/benchmark.js node",
     "bench:express": "vp pack && node packages/conformance/dist/benchmark.js express",
     "bench:fastify": "vp pack && node packages/conformance/dist/benchmark.js fastify",
-    "bench:bun": "vp pack && bun packages/conformance/dist/benchmark.js bun"
+    "bench:bun": "vp pack && BENCH_CLIENT_EXEC=node bun packages/conformance/dist/benchmark.js bun",
+    "bench:bun-node-adapter": "vp pack && BENCH_CLIENT_EXEC=node BENCH_NODE_ADAPTER_ON_BUN=1 bun packages/conformance/dist/benchmark.js node"
   },
   "devDependencies": {
     "@nestjs/common": "catalog:",
