@@ -6,21 +6,39 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 import { NestFactory } from "@nestjs/core";
 import {
+  Body,
   Controller,
   Get,
   Module,
+  Post,
+  UploadedFile,
+  UploadedFiles,
+  UseInterceptors,
   VERSION_NEUTRAL,
   Version,
   VersioningType,
   type INestApplication,
+  type NestInterceptor,
+  type Type,
   type VersioningOptions,
 } from "@nestjs/common";
-import { ExpressAdapter } from "@nestjs/platform-express";
+import {
+  ExpressAdapter,
+  FileInterceptor as ExpressFileInterceptor,
+  FilesInterceptor as ExpressFilesInterceptor,
+} from "@nestjs/platform-express";
 import { WsAdapter } from "@nestjs/platform-ws";
 import { MessageBody, SubscribeMessage, WebSocketGateway } from "@nestjs/websockets";
 import { io as connect } from "socket.io-client";
 import { WebSocket } from "ws";
-import { NodeHttpAdapter, NativeResponse, type NativeRequest } from "nestjs-adapter-node";
+import {
+  FileInterceptor,
+  FilesInterceptor,
+  NodeHttpAdapter,
+  NativeResponse,
+  type NativeRequest,
+  type UploadedFileData,
+} from "nestjs-adapter-node";
 import { BunHttpAdapter } from "nestjs-adapter-bun";
 import { compareAdapters, startFixture } from "../packages/conformance/src/compare.js";
 import { FixtureModule, GreetingService } from "../packages/conformance/src/fixture.js";
@@ -60,6 +78,35 @@ class ChatGateway {
 }
 @Module({ imports: [FixtureModule], providers: [ChatGateway] })
 class ChatModule {}
+
+function uploadModule(interceptors: {
+  FileInterceptor: (field: string) => Type<NestInterceptor>;
+  FilesInterceptor: (field: string, maxCount?: number) => Type<NestInterceptor>;
+}) {
+  const describeFile = (file: UploadedFileData) => ({
+    fieldname: file.fieldname,
+    originalname: file.originalname,
+    mimetype: file.mimetype,
+    size: file.size,
+    text: file.buffer.toString(),
+  });
+  @Controller("upload")
+  class UploadController {
+    @Post("one")
+    @UseInterceptors(interceptors.FileInterceptor("avatar"))
+    one(@UploadedFile() file: UploadedFileData, @Body() body: Record<string, unknown>) {
+      return { file: file && describeFile(file), body: { ...body } };
+    }
+    @Post("many")
+    @UseInterceptors(interceptors.FilesInterceptor("docs", 2))
+    many(@UploadedFiles() files: UploadedFileData[], @Body() body: Record<string, unknown>) {
+      return { files: files.map(describeFile), body: { ...body } };
+    }
+  }
+  @Module({ controllers: [UploadController] })
+  class UploadModule {}
+  return UploadModule;
+}
 
 const apps: INestApplication[] = [];
 afterEach(async () => {
@@ -444,5 +491,74 @@ describe("native Nest adapters", () => {
     }
     expect((await fetch(`${base}/socket.io/socket.io.js`)).status).toBe(200);
     expect((await fetch(`${base}/api`)).status).toBe(200);
+  });
+  it("handles uploads like Nest's Multer interceptors", async () => {
+    const native = await NestFactory.create(
+      uploadModule({ FileInterceptor, FilesInterceptor }),
+      new NodeHttpAdapter({ uploadLimit: 1024 * 1024 }),
+      { logger: false },
+    );
+    const express = await NestFactory.create(
+      uploadModule({
+        FileInterceptor: ExpressFileInterceptor,
+        FilesInterceptor: ExpressFilesInterceptor,
+      }),
+      new ExpressAdapter(),
+      { logger: false },
+    );
+    apps.push(native, express);
+    await Promise.all([native.listen(0, "127.0.0.1"), express.listen(0, "127.0.0.1")]);
+    const requests: [string, () => FormData][] = [
+      [
+        "one",
+        () => {
+          const form = new FormData();
+          form.append("title", "Profile");
+          // Larger than the default 100 KiB body limit, so `uploadLimit` must apply.
+          form.append("avatar", new Blob(["a".repeat(200_000)], { type: "image/png" }), "me.png");
+          return form;
+        },
+      ],
+      ["one", () => new FormData()],
+      [
+        "many",
+        () => {
+          const form = new FormData();
+          form.append("docs", new Blob(["first"], { type: "text/plain" }), "a.txt");
+          form.append("docs", new Blob(["second"], { type: "text/plain" }), "b.txt");
+          form.append("note", "two files");
+          return form;
+        },
+      ],
+      [
+        "many",
+        () => {
+          const form = new FormData();
+          for (const name of ["a", "b", "c"]) form.append("docs", new Blob([name]), `${name}.txt`);
+          return form;
+        },
+      ],
+      [
+        "one",
+        () => {
+          const form = new FormData();
+          form.append("other", new Blob(["x"]), "x.txt");
+          return form;
+        },
+      ],
+    ];
+    for (const [path, form] of requests) {
+      const [actual, expected] = await Promise.all(
+        [native, express].map(async (app) => {
+          const response = await fetch(`${await app.getUrl()}/upload/${path}`, {
+            method: "POST",
+            body: form(),
+          });
+          const body = (await response.json()) as { message?: string };
+          return { status: response.status, body: response.ok ? body : undefined };
+        }),
+      );
+      expect(actual).toEqual(expected);
+    }
   });
 });

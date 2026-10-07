@@ -24,11 +24,20 @@ import {
 import { NativeResponse } from "./response.js";
 
 export { NativeResponse } from "./response.js";
+export {
+  AnyFilesInterceptor,
+  FileFieldsInterceptor,
+  FileInterceptor,
+  FilesInterceptor,
+  type UploadedFileData,
+} from "./uploads.js";
 export { NullObject, parseQuery } from "./request.js";
 export type { NativeRequest } from "./request.js";
 export type { ResponseBody } from "./response.js";
 export interface NativeAdapterOptions {
   bodyLimit?: number;
+  /** Limit for multipart bodies (file uploads); defaults to `bodyLimit`. */
+  uploadLimit?: number;
   shutdownTimeout?: number;
 }
 type VersionValue = Parameters<AbstractHttpAdapter["applyVersionFilter"]>[1];
@@ -63,6 +72,12 @@ export abstract class NativeHttpAdapter<TServer> extends AbstractHttpAdapter<
       (!Number.isSafeInteger(options.bodyLimit) || options.bodyLimit <= 0)
     ) {
       throw new Error("bodyLimit must be a positive integer.");
+    }
+    if (
+      options.uploadLimit !== undefined &&
+      (!Number.isSafeInteger(options.uploadLimit) || options.uploadLimit <= 0)
+    ) {
+      throw new Error("uploadLimit must be a positive integer.");
     }
     if (
       options.shutdownTimeout !== undefined &&
@@ -251,12 +266,19 @@ export abstract class NativeHttpAdapter<TServer> extends AbstractHttpAdapter<
     rawBody: boolean,
   ): Handler {
     const read = this.readBody.bind(this);
+    const uploadLimit = this.adapterOptions.uploadLimit ?? limit;
     return (req, _res, next) => {
       // A body set by an earlier parser is left alone.
       if (!isParsedMethod(req.method) || req.body !== undefined) return next();
       const kind = kindOf(mediaType(req.headers["content-type"]));
       if (kind === undefined) return next();
-      return parseRequestBody(req, kind, limit, rawBody, read).then(() => next());
+      return parseRequestBody(
+        req,
+        kind,
+        kind === "multipart" ? uploadLimit : limit,
+        rawBody,
+        read,
+      ).then(() => next());
     };
   }
   createMiddlewareFactory(method: RequestMethod) {

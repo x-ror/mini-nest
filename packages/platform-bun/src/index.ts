@@ -7,9 +7,15 @@ import {
 } from "@nestjs/common";
 import { NativeHttpAdapter, type NativeRequest } from "@shared";
 
-export { NativeResponse } from "@shared";
+export {
+  AnyFilesInterceptor,
+  FileFieldsInterceptor,
+  FileInterceptor,
+  FilesInterceptor,
+  NativeResponse,
+} from "@shared";
 
-export type { NativeAdapterOptions, NativeRequest } from "@shared";
+export type { NativeAdapterOptions, NativeRequest, UploadedFileData } from "@shared";
 
 const OWNER = Symbol("socketTransport");
 type AnySocket = Bun.ServerWebSocket<any>;

@@ -12,9 +12,15 @@ import {
   type ResponseBody,
 } from "@shared";
 
-export { NativeResponse } from "@shared";
+export {
+  AnyFilesInterceptor,
+  FileFieldsInterceptor,
+  FileInterceptor,
+  FilesInterceptor,
+  NativeResponse,
+} from "@shared";
 
-export type { NativeAdapterOptions, NativeRequest } from "@shared";
+export type { NativeAdapterOptions, NativeRequest, UploadedFileData } from "@shared";
 
 const EMPTY_BODY = Buffer.alloc(0);
 

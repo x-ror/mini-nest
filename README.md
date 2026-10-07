@@ -36,7 +36,8 @@ Fastify a benchmark-only one.
 | TLS / HTTPS                                          | Supported     | Untested      | Nest `httpsOptions`; Bun reads key, cert, ca and passphrase |
 | WebSocket gateways                                   | Supported     | Supported     | Node: Nest's `WsAdapter`; Bun: `BunWsAdapter`               |
 | Socket.IO gateways                                   | Supported     | Not supported | Automatic on Node; under Bun use the Node adapter           |
-| Multer decorators, MVC                               | Not supported | Not supported | Use a different Nest platform adapter if required           |
+| File upload interceptors                             | Supported     | Supported     | `FileInterceptor` and friends; memory storage only          |
+| MVC                                                  | Not supported | Not supported | Use a different Nest platform adapter if required           |
 
 ## Usage
 
@@ -79,8 +80,7 @@ These are **not drop-in Express plugin adapters**. `@Req()` exposes a
 `NativeRequest` with `.raw` (a web `Request`) and Nest's usual data fields.
 `@Res()` exposes `NativeResponse` with `status`, `json`, `send`, `write`, `end`,
 `setHeader`, `getHeader`, and `redirect`, not a Node `ServerResponse`.
-No Express-specific middleware APIs, Multer-compatible file decorators,
-or MVC are provided yet. `@Sse()` streams Nest
+No Express-specific middleware APIs or MVC are provided yet. `@Sse()` streams Nest
 `MessageEvent` values as `text/event-stream`. Basic static file serving and CORS are supported through
 the adapter middleware API with origin/preflight handling. Unsupported adapter
 configuration throws instead of silently doing nothing. Do not assume browser
@@ -100,9 +100,14 @@ transport-specific code before replacing the platform adapter:
   `res.setHeader(...)`, and `res.write(...)` are available, and on Node
   `res.on(...)` forwards to the underlying response. Other Express/Fastify
   APIs and plugin-specific methods are not.
-- Replace Multer `@UploadedFile()` / `@UploadedFiles()` flows with
-  `@Body()` multipart fields, where uploaded files are Web `File` objects.
-  Uploads are memory-backed and bounded by `bodyLimit`.
+- Keep `@UploadedFile()` / `@UploadedFiles()` and import `FileInterceptor`,
+  `FilesInterceptor`, `FileFieldsInterceptor` or `AnyFilesInterceptor` from the
+  adapter package instead of `@nestjs/platform-express`. Files have Multer's
+  memory-storage shape (`originalname`, `mimetype`, `size`, `buffer`). Multer
+  options (disk storage, `fileFilter`, per-file limits) are not supported;
+  uploads are held in memory and bounded by the adapter's `uploadLimit`, which
+  defaults to `bodyLimit`. Without an interceptor, files stay on `@Body()` as
+  Web `File` objects.
 - Register static assets and CORS through the adapter API and test any
   framework-specific options; these implementations intentionally provide a
   smaller feature set than the corresponding Express/Fastify integrations.
@@ -110,7 +115,7 @@ transport-specific code before replacing the platform adapter:
   proxy. Do not trust forwarded headers unless the application implements a
   trusted-proxy policy.
 
-If the application depends on Multer decorators, Fastify plugins,
+If the application depends on Multer disk storage, Fastify plugins,
 Express middleware, or Nest MVC, retain the existing
 platform adapter for that application.
 
