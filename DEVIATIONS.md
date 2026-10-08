@@ -15,12 +15,21 @@ history, not active workspace packages.
   routes, `res.write()` streaming, opt-in text/raw body parsers, all Nest
   versioning types, and native HTTPS via `httpsOptions` (untested on Bun) are
   supported. Forwarded headers are not interpreted by the adapter. Multipart files are
-  native `File` values in `@Body()`. Basic static file serving, CORS headers,
-  and preflight handling are supported through the adapter middleware API.
+  native `File` values in `@Body()`. Basic static file serving is supported
+  through the adapter middleware API. CORS mirrors the `cors` package used by
+  Nest's Express adapter (options, headers, `Vary`, preflight handling), except
+  that a `204` preflight omits `Content-Length`. Cookies rely on Nest 12's
+  built-in signing and parsing helpers: `@Cookies()`, `@SignedCookies()`,
+  `setCookie()`/`clearCookie()` and `cookies.secret` work unchanged, and the
+  request/response facades add `req.cookies`, `req.signedCookies`,
+  `res.cookie()` and `res.clearCookie()` so `cookie-parser` is not needed.
+  Express's cookie `encode` option is not provided.
 - `path-to-regexp` is a deliberate routing dependency; maintaining a custom
   path grammar would add unnecessary compatibility risk.
 - Middleware path normalization uses Nest's internal `LegacyRouteConverter`,
-  just like its Express adapter; this is a version-sensitive integration point.
+  just like its Express adapter, and cookie parsing/serialization imports
+  `@nestjs/core/helpers/cookies/*` so signatures and header formats stay
+  byte-identical to Nest's; these are version-sensitive integration points.
 - Redirects always return a plain-text body, rather than Express's optional
   Accept-negotiated HTML redirect page.
 - Performance claims require separate benchmarks. Deno is no longer a target.
@@ -36,7 +45,7 @@ history, not active workspace packages.
 ### Phase 2: expand supported real-world integrations
 
 - [x] multipart/form-data and nested form parsing
-- [x] static asset handling and `CORS`
+- [x] static asset handling, `CORS` with `cors`-package parity, and cookies
 - [x] HTTPS/TLS deployment guidance via a reverse proxy, without pretending to be a native HTTPS adapter
 - [x] Nest `@Sse()` Observable streaming
 

@@ -12,6 +12,11 @@ import {
   type NestApplicationOptions,
   type VersioningOptions,
 } from "@nestjs/common";
+import type {
+  CorsOptions,
+  CorsOptionsDelegate,
+  CustomOrigin,
+} from "@nestjs/common/interfaces/external/cors-options.interface.js";
 import { NativeRouter, type Fail, type Handler, type Next } from "./router.js";
 import {
   createRequest,
@@ -33,9 +38,9 @@ export {
   FilesInterceptor,
   type UploadedFileData,
 } from "./uploads.js";
-export { NullObject, parseQuery } from "./request.js";
+export { CookieRequest, NullObject, parseQuery } from "./request.js";
 export type { NativeRequest } from "./request.js";
-export type { ResponseBody } from "./response.js";
+export type { ResponseBody, ResponseCookieOptions } from "./response.js";
 export interface NativeAdapterOptions {
   bodyLimit?: number;
   /** Limit for multipart bodies (file uploads); defaults to `bodyLimit`. */
@@ -48,6 +53,7 @@ export type ViewRenderer = (
   options: object,
   callback: (error: unknown, html?: string) => void,
 ) => void;
+type StaticOrigin = Exclude<NonNullable<CorsOptions["origin"]>, CustomOrigin>;
 type VersionValue = Parameters<AbstractHttpAdapter["applyVersionFilter"]>[1];
 type ErrorHandler = (
   error: unknown,
@@ -131,8 +137,8 @@ export abstract class NativeHttpAdapter<TServer> extends AbstractHttpAdapter<
     return this;
   }
   readonly fetch = (raw: Request, info?: { ip?: string }): Promise<Response> => {
-    const request = createRequest(raw, info?.ip);
-    const response = new NativeResponse(request.method);
+    const request = createRequest(raw, info?.ip, this.cookieSigner);
+    const response = new NativeResponse(request.method, this.cookieSigner);
     this.dispatch(request, response);
     return response.done;
   };
@@ -304,74 +310,83 @@ export abstract class NativeHttpAdapter<TServer> extends AbstractHttpAdapter<
     const converted = LegacyRouteConverter.tryConvert(path);
     return converted.length > 1 ? converted.replace(/\/$/, "") : converted;
   }
-  enableCors(options: Record<string, unknown> = {}): void {
-    const originOption = options.origin ?? "*";
-    const methods = Array.isArray(options.methods)
-      ? options.methods.map((value) => String(value))
-      : ["GET", "HEAD", "PUT", "PATCH", "POST", "DELETE", "OPTIONS"];
-    const allowedHeaders = Array.isArray(options.allowedHeaders)
-      ? options.allowedHeaders.map((value) => String(value))
-      : ["Content-Type", "Authorization", "X-Requested-With", "X-Auth"];
-    const exposedHeaders = Array.isArray(options.exposedHeaders)
-      ? options.exposedHeaders.map((value) => String(value))
-      : [];
-    const credentials = options.credentials === true || options.allowCredentials === true;
-    const maxAge = options.maxAge;
+  /**
+   * Mirrors `expressjs/cors` (what Nest's Express adapter installs): the same
+   * options, header values, `Vary` handling and preflight behavior. Accepts a
+   * `CorsOptionsDelegate` function as well as a static options object.
+   */
+  enableCors(options: CorsOptions | CorsOptionsDelegate<NativeRequest> = {}): void {
+    const resolveOptions =
+      typeof options === "function"
+        ? (req: NativeRequest) =>
+            new Promise<CorsOptions>((resolveWith, reject) => {
+              options(req, (error, resolved) => (error ? reject(error) : resolveWith(resolved)));
+            })
+        : () => Promise.resolve(options);
+    const listValue = (value: string | string[] | undefined): string | undefined =>
+      Array.isArray(value) ? value.join(",") : value;
+    const matches = (entry: StaticOrigin, origin: string | undefined): boolean =>
+      Array.isArray(entry)
+        ? entry.some((candidate) => matches(candidate, origin))
+        : typeof entry === "string"
+          ? origin === entry
+          : entry instanceof RegExp
+            ? origin !== undefined && entry.test(origin)
+            : Boolean(entry);
+    const originOf = (req: NativeRequest, option: StaticOrigin | CustomOrigin) =>
+      typeof option === "function"
+        ? new Promise<StaticOrigin | undefined>((resolveWith, reject) => {
+            option(req.headers.origin, (error, allowed) =>
+              error ? reject(error) : resolveWith(allowed),
+            );
+          })
+        : Promise.resolve(option);
 
-    const matches = (entry: unknown, origin: string): boolean =>
-      entry instanceof RegExp ? entry.test(origin) : entry === origin;
-    // Mirrors expressjs/cors: returns the ACAO value, or undefined to omit the header.
-    const resolveOrigin = async (requestOrigin?: string): Promise<string | undefined> => {
-      if (originOption === false) return undefined;
-      if (originOption === true || originOption === "*") return "*";
-      if (typeof originOption === "string") return originOption;
-      if (requestOrigin === undefined) return undefined;
-      if (originOption instanceof RegExp || Array.isArray(originOption)) {
-        const entries = Array.isArray(originOption) ? originOption : [originOption];
-        return entries.some((entry) => matches(entry, requestOrigin)) ? requestOrigin : undefined;
-      }
-      if (typeof originOption === "function") {
-        const allowed = await new Promise<unknown>((resolveAllowed, reject) => {
-          originOption(requestOrigin, (err: unknown, allow: unknown) =>
-            err ? reject(err) : resolveAllowed(allow),
+    this.use((req, res, next) => {
+      resolveOptions(req)
+        .then(async (resolved) => {
+          const origin = await originOf(req, resolved.origin ?? "*");
+          // Like expressjs/cors, a falsy origin disables CORS for this request.
+          if (!origin) return next();
+          const requestOrigin = req.headers.origin;
+          if (origin === "*") {
+            res.setHeader("access-control-allow-origin", "*");
+          } else if (typeof origin === "string") {
+            res.setHeader("access-control-allow-origin", origin);
+            res.vary("Origin");
+          } else {
+            if (matches(origin, requestOrigin) && requestOrigin !== undefined)
+              res.setHeader("access-control-allow-origin", requestOrigin);
+            res.vary("Origin");
+          }
+          if (resolved.credentials === true)
+            res.setHeader("access-control-allow-credentials", "true");
+          const exposed = listValue(resolved.exposedHeaders);
+          if (exposed) res.setHeader("access-control-expose-headers", exposed);
+          if (req.method !== "OPTIONS") return next();
+
+          res.setHeader(
+            "access-control-allow-methods",
+            listValue(resolved.methods) ?? "GET,HEAD,PUT,PATCH,POST,DELETE",
           );
-        });
-        if (allowed === true) return requestOrigin;
-        if (typeof allowed === "string") return allowed;
-        if (allowed instanceof RegExp || Array.isArray(allowed)) {
-          const entries = Array.isArray(allowed) ? allowed : [allowed];
-          return entries.some((entry) => matches(entry, requestOrigin)) ? requestOrigin : undefined;
-        }
-        return undefined;
-      }
-      return undefined;
-    };
-
-    this.use(async (req, res, next) => {
-      const requestOrigin = typeof req.headers.origin === "string" ? req.headers.origin : undefined;
-      const allowOrigin = await resolveOrigin(requestOrigin);
-      if (originOption !== "*" && originOption !== true) res.setHeader("vary", "Origin");
-      if (allowOrigin) res.setHeader("access-control-allow-origin", allowOrigin);
-      if (credentials) res.setHeader("access-control-allow-credentials", "true");
-      if (exposedHeaders.length) {
-        res.setHeader("access-control-expose-headers", exposedHeaders.join(", "));
-      }
-      const isPreflight =
-        req.method === "OPTIONS" &&
-        typeof req.headers["access-control-request-method"] === "string";
-      if (isPreflight) {
-        const requestedHeaders =
-          !Array.isArray(options.allowedHeaders) &&
-          typeof req.headers["access-control-request-headers"] === "string"
-            ? req.headers["access-control-request-headers"]
-            : allowedHeaders.join(", ");
-        res.setHeader("access-control-allow-methods", methods.join(", "));
-        res.setHeader("access-control-allow-headers", requestedHeaders);
-        if (typeof maxAge === "number") res.setHeader("access-control-max-age", String(maxAge));
-        res.status(204).end();
-        return;
-      }
-      next();
+          let allowedHeaders = listValue(resolved.allowedHeaders);
+          if (allowedHeaders === undefined) {
+            allowedHeaders = req.headers["access-control-request-headers"];
+            res.vary("Access-Control-Request-Headers");
+          }
+          if (allowedHeaders) res.setHeader("access-control-allow-headers", allowedHeaders);
+          const maxAge = resolved.maxAge;
+          if (typeof maxAge === "number" || maxAge) {
+            res.setHeader("access-control-max-age", String(maxAge));
+          }
+          if (resolved.preflightContinue) return next();
+          // Safari needs an explicit zero content-length on 204 preflights.
+          res
+            .status(resolved.optionsSuccessStatus ?? 204)
+            .setHeader("content-length", "0")
+            .end();
+        })
+        .catch(next);
     });
   }
   useStaticAssets(

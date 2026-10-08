@@ -27,7 +27,9 @@ Fastify a benchmark-only one.
 | Routing, middleware, guards, pipes, interceptors, DI | Supported     | Supported     | Shared adapter implementation                               |
 | JSON and nested URL-encoded bodies                   | Supported     | Supported     | Parsed body limit defaults to 100 KiB                       |
 | Multipart forms                                      | Supported     | Supported     | Files are native `File` values on `@Body()`                 |
-| CORS and static assets                               | Basic support | Basic support | Not a replacement for dedicated integrations/CDNs           |
+| CORS                                                 | Supported     | Supported     | Same options and headers as `cors` (Express)                |
+| Cookies                                              | Supported     | Supported     | `@Cookies()`, `@SignedCookies()`, `res.cookie()`; no parser |
+| Static assets                                        | Basic support | Basic support | Not a replacement for dedicated integrations/CDNs           |
 | Text, raw and custom-type bodies                     | Supported     | Supported     | Opt in with `app.useBodyParser(...)`                        |
 | Header, media-type and custom versioning             | Supported     | Supported     | Same per-handler matching as Nest's Express adapter         |
 | Nest `@Sse()`                                        | Supported     | Supported     | Observable `MessageEvent` stream                            |
@@ -85,10 +87,59 @@ Express-compatible view engines: `app.setBaseViewsDir(dir)` (default `./views`)
 and `app.setViewEngine("ejs")`, or pass `{ extension, render }` with any
 `(path, options, callback)` function. Express `app.locals` and view caching
 settings are not provided. `@Sse()` streams Nest
-`MessageEvent` values as `text/event-stream`. Basic static file serving and CORS are supported through
-the adapter middleware API with origin/preflight handling. Unsupported adapter
+`MessageEvent` values as `text/event-stream`. Basic static file serving is
+supported through the adapter middleware API. Unsupported adapter
 configuration throws instead of silently doing nothing. Do not assume browser
-cross-origin access is enabled.
+cross-origin access is enabled: call `app.enableCors()` as on Express.
+
+### CORS
+
+`app.enableCors(options)` and `NestFactory.create(..., { cors })` take Nest's
+`CorsOptions` or a `CorsOptionsDelegate` and behave like the `cors` package
+that Nest's Express adapter installs: `origin` may be `*`, `true` (reflect the
+request origin), a string, a `RegExp`, an array of those, or a callback;
+`methods`, `allowedHeaders` and `exposedHeaders` take strings or arrays;
+`credentials`, `maxAge`, `preflightContinue` and `optionsSuccessStatus` are
+honored. Every `OPTIONS` request is answered as a preflight unless
+`preflightContinue` is set, `Vary` is appended for reflected origins and
+headers, and an origin that is not allowed gets no
+`Access-Control-Allow-Origin` header at all. The only difference from Express is
+that a `204` preflight carries no `Content-Length` header, as HTTP requires.
+
+### Cookies
+
+Nest's own cookie support works unchanged on both adapters: `@Cookies()`,
+`@SignedCookies()`, `httpAdapter.setCookie()` / `clearCookie()` and the
+`cookies: { secret }` application option. No `cookie-parser` is needed:
+`NativeRequest` parses the `Cookie` header lazily into `req.cookies`, and
+`req.signedCookies` holds the cookies whose signature verifies (it throws when
+no secret is configured, like `@SignedCookies()`). Signatures use Nest's
+`s:value.signature` format, so cookies signed by Express/`cookie-parser` with
+the same secret keep verifying.
+
+For `@Res()` handlers migrated from Express, `NativeResponse` offers
+`res.cookie(name, value, options)` and `res.clearCookie(name, options)` with
+Express semantics: objects become `j:`-prefixed JSON, `maxAge` is in
+**milliseconds** and also sets `Expires`, and `signed: true` uses the
+application secret. Note that Nest's `httpAdapter.setCookie()` takes `maxAge`
+in seconds. Invalid names, values or attributes throw a `TypeError`, and
+`sameSite: "none"` or `partitioned` require `secure: true`. Express's `encode`
+option is not provided.
+
+```ts
+@Get("login")
+login(@Res() res: NativeResponse) {
+  res
+    .cookie("session", token, { httpOnly: true, secure: true, maxAge: 86_400_000 })
+    .cookie("prefs", { theme: "dark" })
+    .json({ ok: true });
+}
+
+@Get("me")
+me(@Cookies("prefs") prefs: string, @SignedCookies("uid") uid?: string) {
+  return { prefs, uid };
+}
+```
 
 ### Migrating from Express or Fastify
 
@@ -112,8 +163,12 @@ transport-specific code before replacing the platform adapter:
   uploads are held in memory and bounded by the adapter's `uploadLimit`, which
   defaults to `bodyLimit`. Without an interceptor, files stay on `@Body()` as
   Web `File` objects.
-- Register static assets and CORS through the adapter API and test any
-  framework-specific options; these implementations intentionally provide a
+- Keep `app.enableCors(...)` as is; the options and resulting headers match
+  the `cors` package. Replace `cookie-parser` with nothing: `req.cookies`,
+  `req.signedCookies`, `res.cookie()` and `res.clearCookie()` are built in,
+  and signed cookies use the `cookies: { secret }` application option.
+- Register static assets through the adapter API and test any
+  framework-specific options; the implementation intentionally provides a
   smaller feature set than the corresponding Express/Fastify integrations.
 - Pass Nest `httpsOptions` for native HTTPS, or terminate TLS at a reverse
   proxy. Do not trust forwarded headers unless the application implements a
