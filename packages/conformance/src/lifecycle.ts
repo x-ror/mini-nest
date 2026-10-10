@@ -69,47 +69,65 @@ export async function checkLifecycle(
   // close() waits for an in-flight request and still delivers its response.
   {
     const { app, base } = await start(createAdapter, {});
-    const started = nextStart();
-    const pending = fetch(`${base}/lifecycle/slow`);
-    await started;
-    const closing = app.close();
-    const response = await pending;
-    assert.equal(response.status, 200, `${label}: graceful close delivers the response`);
-    assert.deepEqual(await response.json(), { slow: true });
-    await closing;
-    await assert.rejects(fetch(`${base}/lifecycle/slow`), `${label}: closed server refuses`);
+    let closing: Promise<void> | undefined;
+    try {
+      const started = nextStart();
+      const pending = fetch(`${base}/lifecycle/slow`);
+      await started;
+      closing = app.close();
+      const response = await pending;
+      assert.equal(response.status, 200, `${label}: graceful close delivers the response`);
+      assert.deepEqual(await response.json(), { slow: true });
+      await closing;
+      await assert.rejects(fetch(`${base}/lifecycle/slow`), `${label}: closed server refuses`);
+    } finally {
+      // A failed assertion must not leave the server listening.
+      await (closing ?? app.close());
+    }
   }
 
   // shutdownTimeout forcibly ends connections that outlive it.
   {
     const { app, base } = await start(createAdapter, { shutdownTimeout: 100 });
-    const started = nextStart();
-    const pending = fetch(`${base}/lifecycle/hang`).then(
-      () => "answered",
-      () => "dropped",
-    );
-    await started;
-    const before = Date.now();
-    await app.close();
-    const elapsed = Date.now() - before;
-    assert.ok(elapsed >= 90 && elapsed < 2000, `${label}: shutdownTimeout took ${elapsed} ms`);
-    assert.equal(await pending, "dropped", `${label}: hung request is dropped on timeout`);
+    let closed = false;
+    try {
+      const started = nextStart();
+      const pending = fetch(`${base}/lifecycle/hang`).then(
+        () => "answered",
+        () => "dropped",
+      );
+      await started;
+      const before = Date.now();
+      await app.close();
+      closed = true;
+      const elapsed = Date.now() - before;
+      assert.ok(elapsed >= 90 && elapsed < 2000, `${label}: shutdownTimeout took ${elapsed} ms`);
+      assert.equal(await pending, "dropped", `${label}: hung request is dropped on timeout`);
+    } finally {
+      if (!closed) await app.close();
+    }
   }
 
   // forceCloseConnections ends open connections right away.
   {
     const { app, base } = await start(createAdapter, { forceCloseConnections: true });
-    const started = nextStart();
-    const pending = fetch(`${base}/lifecycle/hang`).then(
-      () => "answered",
-      () => "dropped",
-    );
-    await started;
-    const before = Date.now();
-    await app.close();
-    const elapsed = Date.now() - before;
-    assert.ok(elapsed < 1000, `${label}: forceCloseConnections took ${elapsed} ms`);
-    assert.equal(await pending, "dropped", `${label}: forced close drops the request`);
+    let closed = false;
+    try {
+      const started = nextStart();
+      const pending = fetch(`${base}/lifecycle/hang`).then(
+        () => "answered",
+        () => "dropped",
+      );
+      await started;
+      const before = Date.now();
+      await app.close();
+      closed = true;
+      const elapsed = Date.now() - before;
+      assert.ok(elapsed < 1000, `${label}: forceCloseConnections took ${elapsed} ms`);
+      assert.equal(await pending, "dropped", `${label}: forced close drops the request`);
+    } finally {
+      if (!closed) await app.close();
+    }
   }
 
   // A client that disconnects from an SSE stream unsubscribes the Observable.

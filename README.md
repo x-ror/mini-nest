@@ -311,9 +311,12 @@ With a trusted socket peer, `req.ip` becomes the nearest untrusted
 `X-Forwarded-For` entry, `req.ips` lists the trusted chain farthest first,
 `req.protocol` follows `X-Forwarded-Proto`, and `req.hostname` follows
 `X-Forwarded-Host`. The results match Express for the cases in the
-conformance suite. Invalid values throw when the adapter is created or the
-setting is applied. `app.set()` understands only `trust proxy` (and accepts
-`x-powered-by`, which these adapters never send); other settings throw.
+conformance suite. Invalid values, including a `/0` range, throw when the
+adapter is created or the setting is applied, so the app fails at startup as
+on Express; `null`, `false` and `""` trust nothing. `app.set()` accepts any
+setting like Express, but only `trust proxy` has an effect: `x-powered-by` is
+accepted silently (these adapters never send that header), and other settings
+log a warning that they are ignored.
 
 > **Warning:** trust only the proxies in front of the application. With
 > `true` or a hop count larger than the real proxy chain, any client can set

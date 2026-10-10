@@ -207,6 +207,8 @@ const trustCases: Case[] = [
   ["/api/client", { headers: { "x-forwarded-for": "203.0.113.7, ::ffff:10.0.0.9" } }],
   ["/api/client", { headers: { "x-forwarded-proto": "https" } }],
   ["/api/client", { headers: { "x-forwarded-proto": "https, http" } }],
+  ["/api/client", { headers: { "x-forwarded-proto": " , https" } }],
+  ["/api/client", { headers: { "x-forwarded-host": " , b.example" } }],
   ["/api/client", { headers: { "x-forwarded-host": "app.example:8443" } }],
   ["/api/client", { headers: { "x-forwarded-host": "a.example, b.example" } }],
   ["/api/client", { headers: { "x-forwarded-host": "[2001:db8::1]:8443" } }],

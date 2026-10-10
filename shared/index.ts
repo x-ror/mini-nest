@@ -6,6 +6,7 @@ import { AbstractHttpAdapter } from "@nestjs/core";
 import { LegacyRouteConverter } from "@nestjs/core/internal";
 import {
   HttpException,
+  Logger,
   RequestMethod,
   VERSION_NEUTRAL,
   VersioningType,
@@ -41,10 +42,9 @@ export {
 } from "./uploads.js";
 export { NullObject, parseQuery } from "./request.js";
 export {
-  forwardedChain,
-  forwardedHost,
-  forwardedProtocol,
   hostnameOf,
+  resolveProxy,
+  type ProxyView,
   type TrustFunction,
   type TrustProxy,
 } from "./proxy.js";
@@ -147,18 +147,22 @@ export abstract class NativeHttpAdapter<TServer> extends AbstractHttpAdapter<
   }
 
   /**
-   * Express's `app.set()` for the settings these adapters understand, so
-   * `app.set("trust proxy", 1)` keeps working after a migration. Express only
-   * sends `X-Powered-By`, so `x-powered-by` is accepted and has no effect.
-   * Any other setting throws instead of being silently ignored.
+   * Express's `app.set()`, so `app.set("trust proxy", 1)` keeps working after a
+   * migration. Like Express, any setting name is accepted. Only `trust proxy`
+   * has an effect; `x-powered-by` is silently accepted (these adapters never
+   * send that header), and any other setting logs a warning that it is
+   * ignored. A call through Nest's app runs in its exception zone, so an
+   * invalid `trust proxy` value fails startup, as it does on Express.
    */
   set(setting: string, value: unknown): this {
     if (setting === "trust proxy") {
       this.trust = compileTrust(value as TrustProxy);
-      return this;
+    } else if (setting !== "x-powered-by") {
+      new Logger(NativeHttpAdapter.name).warn(
+        `app.set("${setting}") has no effect on the native adapters and is ignored.`,
+      );
     }
-    if (setting === "x-powered-by" && typeof value === "boolean") return this;
-    throw new Error(`Unsupported adapter setting: ${setting}`);
+    return this;
   }
   /** Express's `app.enable(setting)`; see `set()`. */
   enable(setting: string): this {

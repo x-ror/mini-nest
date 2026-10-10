@@ -7,14 +7,13 @@ import {
   NativeHttpAdapter,
   NativeResponse,
   NullObject,
-  forwardedChain,
-  forwardedHost,
-  forwardedProtocol,
   hostnameOf,
+  resolveProxy,
   parseQuery,
   type CookieWriter,
   type NativeRequest,
   type ResponseBody,
+  type ProxyView,
   type TrustFunction,
 } from "@shared";
 
@@ -50,7 +49,7 @@ class NodeRequest implements NativeRequest {
   private search: string;
   private parsedQuery?: Record<string, string | string[]>;
   private webRequest?: Request;
-  private chain?: (string | undefined)[];
+  private proxyView?: ProxyView;
 
   constructor(
     readonly incoming: IncomingMessage,
@@ -75,38 +74,31 @@ class NodeRequest implements NativeRequest {
     return this.incoming.headers as Record<string, string>;
   }
   get hostname(): string {
-    const { headers, socket } = this.incoming;
-    if (!this.trust) return (headers.host ?? "localhost").replace(/:\d*$/, "");
-    const forwarded = forwardedHost(
-      undefined,
-      socket.remoteAddress,
-      headers["x-forwarded-host"] as string | undefined,
-      this.trust,
-    );
-    return hostnameOf(forwarded ?? headers.host) ?? "localhost";
+    const host = this.trust ? this.proxy().host : this.incoming.headers.host;
+    return hostnameOf(this.trust ? host : (host ?? "localhost"))!;
   }
   get protocol(): string {
-    const { headers, socket } = this.incoming;
-    const protocol = (socket as TLSSocket).encrypted ? "https" : "http";
-    return forwardedProtocol(
-      protocol,
-      socket.remoteAddress,
-      headers["x-forwarded-proto"] as string | undefined,
-      this.trust,
-    );
+    if (this.trust) return this.proxy().protocol;
+    return (this.incoming.socket as TLSSocket).encrypted ? "https" : "http";
   }
   get ip(): string | undefined {
-    if (!this.trust) return this.incoming.socket.remoteAddress;
-    const chain = this.forwardedChain();
-    return chain[chain.length - 1];
+    return this.trust ? this.proxy().ip : this.incoming.socket.remoteAddress;
   }
   get ips(): string[] {
-    return this.trust ? (this.forwardedChain().slice(1) as string[]).reverse() : [];
+    return this.trust ? this.proxy().ips : [];
   }
-  private forwardedChain(): (string | undefined)[] {
-    return (this.chain ??= forwardedChain(
-      this.incoming.socket.remoteAddress,
-      this.incoming.headers["x-forwarded-for"] as string | undefined,
+  /** Express's `trust proxy` view of this request, computed once (see `resolveProxy`). */
+  private proxy(): ProxyView {
+    const { headers, socket } = this.incoming;
+    return (this.proxyView ??= resolveProxy(
+      {
+        socketAddress: socket.remoteAddress,
+        protocol: (socket as TLSSocket).encrypted ? "https" : "http",
+        host: headers.host ?? "localhost",
+        forwardedFor: headers["x-forwarded-for"] as string | undefined,
+        forwardedProto: headers["x-forwarded-proto"] as string | undefined,
+        forwardedHost: headers["x-forwarded-host"] as string | undefined,
+      },
       this.trust!,
     ));
   }

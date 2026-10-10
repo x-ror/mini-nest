@@ -23,8 +23,7 @@ const PRESETS: Record<string, string[]> = {
 };
 
 /** Compiles a `trust proxy` value; `undefined` means no proxy is trusted. */
-export function compileTrust(value: TrustProxy | undefined): TrustFunction | undefined {
-  if (value === undefined || value === false) return undefined;
+export function compileTrust(value: TrustProxy | null | undefined): TrustFunction | undefined {
   if (value === true) return () => true;
   if (typeof value === "function") return value;
   if (typeof value === "number") {
@@ -33,6 +32,8 @@ export function compileTrust(value: TrustProxy | undefined): TrustFunction | und
     }
     return value === 0 ? undefined : (_address, hop) => hop < value;
   }
+  // Like Express, other falsy values (false, null, "") trust nothing.
+  if (!value) return undefined;
   if (typeof value !== "string" && !Array.isArray(value)) {
     throw new TypeError(`Unsupported trust proxy value: ${String(value)}`);
   }
@@ -62,7 +63,8 @@ function addRange(list: BlockList, entry: string): void {
   if (/^\d+$/.test(range)) prefix = Number(range);
   else if (family === 4 && isIP(range) === 4) prefix = netmaskPrefix(range, entry);
   else throw new TypeError(`Invalid trust proxy range: ${entry}`);
-  if (prefix > max) throw new TypeError(`Invalid trust proxy range: ${entry}`);
+  // proxy-addr rejects /0 (and netmask 0.0.0.0): it would trust every address.
+  if (prefix <= 0 || prefix > max) throw new TypeError(`Invalid trust proxy range: ${entry}`);
   list.addSubnet(address, prefix, type);
 }
 
@@ -88,54 +90,60 @@ function isTrusted(list: BlockList, address: string): boolean {
   return family !== 0 && list.check(normalized, family === 4 ? "ipv4" : "ipv6");
 }
 
+/** What a request reports about its client once `trust proxy` is applied. */
+export interface ProxyView {
+  ip: string | undefined;
+  ips: string[];
+  protocol: string;
+  /** Express's `req.host`: `X-Forwarded-Host` from a trusted peer, else the Host header. */
+  host: string | undefined;
+}
+
+/** The `X-Forwarded-*` request headers plus the connection's own values. */
+export interface ProxyInput {
+  socketAddress: string | undefined;
+  protocol: string;
+  host: string | undefined;
+  forwardedFor: string | undefined;
+  forwardedProto: string | undefined;
+  forwardedHost: string | undefined;
+}
+
 /**
- * proxy-addr's `all()`: the socket address followed by `X-Forwarded-For`
- * entries from nearest to farthest, cut after the first untrusted one.
+ * Express's `req.ip`, `req.ips`, `req.protocol` and `req.host` for one
+ * request. The trust function sees the socket peer (hop 0) once.
  */
-export function forwardedChain(
-  socketAddress: string | undefined,
-  forwardedFor: string | undefined,
-  trust: TrustFunction,
-): (string | undefined)[] {
-  const chain: (string | undefined)[] = [socketAddress];
-  if (forwardedFor) {
-    const entries = forwardedFor.split(",");
+export function resolveProxy(input: ProxyInput, trust: TrustFunction): ProxyView {
+  // proxy-addr's all(): the socket address, then X-Forwarded-For entries from
+  // nearest to farthest, cut after the first untrusted one. Each hop is asked once.
+  const chain: (string | undefined)[] = [input.socketAddress];
+  const peerTrusted = trust(input.socketAddress, 0);
+  if (peerTrusted && input.forwardedFor) {
+    const entries = input.forwardedFor.split(",");
     for (let index = entries.length - 1; index >= 0; index--) {
       const entry = entries[index]!.trim();
-      if (entry) chain.push(entry);
+      if (!entry) continue;
+      chain.push(entry);
+      if (!trust(entry, chain.length - 1)) break;
     }
   }
-  for (let hop = 0; hop < chain.length - 1; hop++) {
-    if (!trust(chain[hop], hop)) {
-      chain.length = hop + 1;
-      break;
-    }
+  let protocol = input.protocol;
+  let host = input.host;
+  if (peerTrusted) {
+    if (input.forwardedProto) protocol = firstEntry(input.forwardedProto).trim();
+    if (input.forwardedHost) host = firstEntry(input.forwardedHost).trimEnd() || undefined;
   }
-  return chain;
+  return {
+    ip: chain[chain.length - 1],
+    ips: (chain.slice(1) as string[]).reverse(),
+    protocol,
+    host,
+  };
 }
 
-/** Express's `req.protocol` with a trusted `X-Forwarded-Proto`. */
-export function forwardedProtocol(
-  protocol: string,
-  socketAddress: string | undefined,
-  forwardedProto: string | undefined,
-  trust: TrustFunction | undefined,
-): string {
-  if (!trust || !forwardedProto || !trust(socketAddress, 0)) return protocol;
-  const comma = forwardedProto.indexOf(",");
-  return (comma === -1 ? forwardedProto : forwardedProto.slice(0, comma)).trim() || protocol;
-}
-
-/** Express's `req.host` with a trusted `X-Forwarded-Host`, before the port is removed. */
-export function forwardedHost(
-  host: string | undefined,
-  socketAddress: string | undefined,
-  forwardedHost: string | undefined,
-  trust: TrustFunction | undefined,
-): string | undefined {
-  if (!trust || !forwardedHost || !trust(socketAddress, 0)) return host;
-  const comma = forwardedHost.indexOf(",");
-  return comma === -1 ? forwardedHost : forwardedHost.slice(0, comma).trimEnd();
+function firstEntry(header: string): string {
+  const comma = header.indexOf(",");
+  return comma === -1 ? header : header.slice(0, comma);
 }
 
 /** Express's `req.hostname`: the host without its port; IPv6 literals keep their brackets. */

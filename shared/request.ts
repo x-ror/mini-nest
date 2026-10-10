@@ -1,11 +1,5 @@
 import { BadRequestException, PayloadTooLargeException } from "@nestjs/common";
-import {
-  forwardedChain,
-  forwardedHost,
-  forwardedProtocol,
-  hostnameOf,
-  type TrustFunction,
-} from "./proxy.js";
+import { hostnameOf, resolveProxy, type ProxyView, type TrustFunction } from "./proxy.js";
 
 export interface NativeRequest {
   raw: Request;
@@ -13,7 +7,10 @@ export interface NativeRequest {
   url: string;
   originalUrl: string;
   path: string;
-  /** The `Host` header without its port, or `X-Forwarded-Host` from a trusted proxy. */
+  /**
+   * The `Host` header without its port, or `X-Forwarded-Host` from a trusted
+   * proxy; `undefined` when a trusted proxy sends an empty one, as on Express.
+   */
   hostname: string;
   /** `http`/`https`, or `X-Forwarded-Proto` from a trusted proxy. */
   protocol: string;
@@ -195,24 +192,45 @@ export function createRequest(raw: Request, ip?: string, trust?: TrustFunction):
   return request;
 }
 
-/** Applies Express's `trust proxy` rules to a request built from a fetch `Request`. */
+/**
+ * Applies Express's `trust proxy` rules to a request built from a fetch
+ * `Request`. Like the Node facade, the client fields are computed on first
+ * read, so the trust function runs inside the handler's error handling and
+ * only for requests that use them.
+ */
 function applyTrustedProxy(
   request: NativeRequest,
   headers: Record<string, string>,
   socketAddress: string | undefined,
   trust: TrustFunction,
 ): void {
-  const chain = forwardedChain(socketAddress, headers["x-forwarded-for"], trust);
-  request.ip = chain[chain.length - 1];
-  request.ips = (chain.slice(1) as string[]).reverse();
-  request.protocol = forwardedProtocol(
-    request.protocol,
-    socketAddress,
-    headers["x-forwarded-proto"],
-    trust,
-  );
-  const host = forwardedHost(undefined, socketAddress, headers["x-forwarded-host"], trust);
-  if (host !== undefined) request.hostname = hostnameOf(host) ?? request.hostname;
+  const host = request.hostname;
+  const protocol = request.protocol;
+  let view: ProxyView | undefined;
+  const resolve = (): ProxyView =>
+    (view ??= resolveProxy(
+      {
+        socketAddress,
+        protocol,
+        host,
+        forwardedFor: headers["x-forwarded-for"],
+        forwardedProto: headers["x-forwarded-proto"],
+        forwardedHost: headers["x-forwarded-host"],
+      },
+      trust,
+    ));
+  const lazy = <T>(read: () => T): PropertyDescriptor => ({
+    configurable: true,
+    enumerable: true,
+    get: read,
+  });
+  Object.defineProperties(request, {
+    ip: lazy(() => resolve().ip),
+    ips: lazy(() => resolve().ips),
+    protocol: lazy(() => resolve().protocol),
+    // The URL host has had its port removed already; hostnameOf is a no-op on it.
+    hostname: lazy(() => hostnameOf(resolve().host)),
+  });
 }
 
 export type BodyReader = (request: NativeRequest, limit: number) => Promise<Buffer> | Buffer | null;

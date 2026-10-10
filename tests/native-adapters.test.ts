@@ -6,12 +6,13 @@ import { get as httpsGet } from "node:https";
 import { join } from "node:path";
 import { inspect } from "node:util";
 import cookieParser from "cookie-parser";
-import { afterEach, describe, expect, it } from "vite-plus/test";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { NestFactory } from "@nestjs/core";
 import { CookieSigner } from "@nestjs/core/helpers/cookies/cookie-signer.js";
 import {
   Body,
   Controller,
+  Logger,
   Get,
   Module,
   Post,
@@ -307,19 +308,37 @@ describe("native Nest adapters", () => {
   });
   it("trusts proxies like Express's trust proxy setting", async () => {
     // Validated up front instead of failing per request.
+    // Validated up front, with proxy-addr's rules: /0 would trust every address.
     for (const invalid of [
       "not-an-ip",
       "10.0.0.0/33",
+      "10.0.0.0/0",
+      "10.0.0.0/0.0.0.0",
       "10.0.0.0/255.0.255.0",
+      "::/0",
       "::1/129",
       -1,
       1.5,
+      {},
     ]) {
       expect(() => new NodeHttpAdapter({ trustProxy: invalid as never })).toThrow(TypeError);
     }
+    // Like Express, other falsy values trust nothing.
+    for (const off of [null, "", false, 0]) {
+      expect(() => new NodeHttpAdapter({ trustProxy: off as never })).not.toThrow();
+    }
+    // Unknown settings are accepted like Express, with a warning instead of an exit.
+    const warnings: unknown[] = [];
+    const warn = vi.spyOn(Logger.prototype, "warn").mockImplementation((message) => {
+      warnings.push(message);
+    });
     const adapter = new NodeHttpAdapter();
-    expect(() => adapter.set("etag", false)).toThrow("Unsupported adapter setting: etag");
+    expect(adapter.set("json spaces", 2)).toBe(adapter);
     expect(adapter.disable("x-powered-by")).toBe(adapter);
+    expect(warnings).toEqual([
+      'app.set("json spaces") has no effect on the native adapters and is ignored.',
+    ]);
+    warn.mockRestore();
 
     // The fetch path (Bun) takes the socket address from the server.
     const fetchAdapter = new NodeHttpAdapter({ trustProxy: "loopback" });
@@ -353,6 +372,19 @@ describe("native Nest adapters", () => {
       protocol: "http",
       hostname: "localhost",
     });
+
+    // A trust function that throws fails the request through Nest (500), not fetch() itself.
+    const throwing = new NodeHttpAdapter({
+      trustProxy: () => {
+        throw new Error("trust failed");
+      },
+    });
+    const throwingApp = await NestFactory.create(FixtureModule, throwing, { logger: false });
+    apps.push(throwingApp);
+    await throwingApp.init();
+    const failed = await throwing.fetch(new Request("http://localhost/api/client"));
+    expect(failed.status).toBe(500);
+    expect((await throwing.fetch(new Request("http://localhost/api"))).status).toBe(200);
 
     // Dual-stack listeners report IPv4 peers as ::ffff:127.0.0.1, which still matches "loopback".
     const mapped = await fetchAdapter.fetch(
