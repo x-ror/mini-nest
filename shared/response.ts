@@ -35,7 +35,8 @@ export interface ResponseCookieOptions extends Omit<
   maxAge?: number | string | null;
   expires?: Date | null;
   domain?: string | null;
-  path?: string | null;
+  /** A falsy path sends an empty `Path=`, which browsers treat like no Path (Express omits it). */
+  path?: string | false | null;
   priority?: CookieSerializeOptions["priority"] | null;
   /** `true` means `strict`, as in Express; `false` omits the attribute. */
   sameSite?: CookieSerializeOptions["sameSite"] | boolean | null;
@@ -152,7 +153,8 @@ export class NativeResponse {
   }
   /**
    * Adds fields to `Vary` like the `vary` package that Express and `cors` use:
-   * case-insensitive de-duplication, and `*` absorbs everything.
+   * case-insensitive de-duplication, and `*` absorbs everything. Unlike
+   * `vary`, empty entries in a comma-separated field are skipped, not rejected.
    */
   vary(field: string | readonly string[]): this {
     const fields = typeof field === "string" ? parseVary(field) : [...field];
@@ -190,13 +192,16 @@ export class NativeResponse {
     value: string | number | boolean | bigint | object | null | undefined,
     options: ResponseCookieOptions = {},
   ): this {
-    const { maxAge, expires, domain, path, priority, sameSite, encode, ...rest } = options;
+    // Own properties only, like Express's `{ ...options }`.
+    const { maxAge, expires, domain, path, priority, sameSite, encode, ...rest } = { ...options };
     if (encode !== undefined) {
       throw new TypeError(`Cookie "${name}": the "encode" option is not supported.`);
     }
     const attributes: CookieSerializeOptions = rest;
-    if (path != null) attributes.path = path;
-    if (domain) attributes.domain = domain;
+    // Express omits Path for a falsy path; an empty `Path=` means the same to
+    // browsers (RFC 6265 5.2.4), and Nest's serializer always writes Path.
+    if (path != null) attributes.path = path ? String(path) : "";
+    if (domain) attributes.domain = String(domain);
     if (expires) attributes.expires = expires;
     if (priority) attributes.priority = priority;
     if (sameSite) attributes.sameSite = sameSite === true ? "strict" : sameSite;

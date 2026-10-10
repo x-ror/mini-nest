@@ -547,10 +547,16 @@ function compileCors(options: CorsInput | undefined): CompiledCors {
   };
 }
 
+/** `cors`'s `isString`: boxed `String` objects count as strings too. */
+function isString(value: unknown): boolean {
+  return typeof value === "string" || value instanceof String;
+}
+
 /** `cors`'s `isOriginAllowed`: arrays recurse, strings compare, RegExps test. */
 function isOriginAllowed(origin: string | undefined, allowed: StaticOrigin): boolean {
   if (Array.isArray(allowed)) return allowed.some((entry) => isOriginAllowed(origin, entry));
-  if (typeof allowed === "string") return origin === allowed;
+  // Boxed strings never equal a primitive origin, so they deny, exactly as in `cors`.
+  if (isString(allowed)) return origin === allowed;
   if (allowed instanceof RegExp) return allowed.test(origin as string);
   return Boolean(allowed);
 }
@@ -579,13 +585,14 @@ function applyCors(
 ): void {
   try {
     const requestOrigin = req.headers.origin;
-    if (origin === "*") {
+    if (isString(origin) && String(origin) === "*") {
       res.setHeader("access-control-allow-origin", "*");
-    } else if (typeof origin === "string") {
-      res.setHeader("access-control-allow-origin", origin);
+    } else if (isString(origin)) {
+      res.setHeader("access-control-allow-origin", String(origin));
       res.vary("Origin");
     } else {
-      if (requestOrigin && isOriginAllowed(requestOrigin, origin)) {
+      // Evaluated even without an Origin header, so stateful /g RegExps advance as in `cors`.
+      if (isOriginAllowed(requestOrigin, origin) && requestOrigin) {
         res.setHeader("access-control-allow-origin", requestOrigin);
       }
       res.vary("Origin");

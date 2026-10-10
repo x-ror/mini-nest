@@ -453,6 +453,24 @@ describe("native Nest adapters", () => {
     expect(aliased.headers.get("access-control-allow-credentials")).toBe("true");
     expect(aliased.headers.get("access-control-allow-headers")).toBe("x-a");
     expect(aliased.headers.get("vary")).toBe("Origin");
+
+    // Boxed String origins must not fall back to "allow everything".
+    for (const origin of [
+      new String("https://trusted.example"),
+      [new String("https://trusted.example")],
+    ]) {
+      const boxed = new NodeHttpAdapter();
+      boxed.enableCors({ origin: origin as string, credentials: true });
+      const app = await NestFactory.create(FixtureModule, boxed, { logger: false });
+      apps.push(app);
+      await app.init();
+      const response = await boxed.fetch(
+        new Request("http://localhost/api", { headers: { origin: "https://evil.example" } }),
+      );
+      expect(response.headers.get("access-control-allow-origin")).toBe(
+        Array.isArray(origin) ? null : "https://trusted.example",
+      );
+    }
   });
   it("appends Vary fields like the vary package", () => {
     const response = new NativeResponse("GET");
@@ -497,6 +515,16 @@ describe("native Nest adapters", () => {
     expect(() => response.cookie("bad;name", "x")).toThrow("Invalid cookie name");
     expect(() => response.cookie("signed", "x", { signed: true })).toThrow("no cookie secret");
     expect(() => response.cookie("custom", "x", { encode: String } as never)).toThrow("encode");
+    // Express omits Path for a falsy path; an empty Path= is equivalent for browsers.
+    const quirks = new NativeResponse("GET")
+      .cookie("empty", "v", { path: "" })
+      .cookie("off", "v", { path: false })
+      .cookie("inherited", "v", Object.create({ path: "/x", maxAge: 1000 }) as object);
+    expect(quirks.getHeader("set-cookie")).toEqual([
+      "empty=v; Path=",
+      "off=v; Path=",
+      "inherited=v; Path=/",
+    ]);
 
     // signed: true uses the cookies.secret application option when cookie-parser is absent.
     const adapter = new NodeHttpAdapter();

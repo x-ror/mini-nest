@@ -100,17 +100,19 @@ that Nest's Express adapter installs. The conformance suite compares a dozen
 configurations header by header against Express.
 
 - Options are merged over the `cors` defaults (any origin, `GET,HEAD,PUT,PATCH,POST,DELETE`,
-  status `204`). An option that is present but `undefined` overrides its
+  status `204`). An `origin` that is present but `undefined` overrides the
   default, so `{ origin: process.env.CORS_ORIGIN }` with the variable unset
-  turns CORS **off** instead of allowing every origin.
+  turns CORS **off** instead of allowing every origin. Static options are read
+  once by `enableCors()`; later changes to the object have no effect.
 - `origin` may be `*`, `true` (reflect the request origin), a string, a
   `RegExp`, an array of those, or a callback. The callback also runs for
   requests without an `Origin` header and receives `undefined`; an error it
   passes becomes a 500 response, as on Express.
 - `methods`, `allowedHeaders` (alias `headers`) and `exposedHeaders` take
-  strings or arrays. Empty values send no header. Without `allowedHeaders`, the
-  requested headers are reflected and `Access-Control-Request-Headers` is
-  added to `Vary`.
+  strings or arrays. An empty `methods` or `exposedHeaders` (`""` or `[]`) and
+  `allowedHeaders: []` send no header. Without `allowedHeaders`, or with
+  `allowedHeaders: ""` (unset, as in `cors`), the requested headers are
+  reflected and `Access-Control-Request-Headers` is added to `Vary`.
 - `credentials`, `maxAge`, `preflightContinue` and `optionsSuccessStatus` are
   honored. Every `OPTIONS` request is answered as a preflight unless
   `preflightContinue` is set, in which case it reaches the `@Options()` route
@@ -119,18 +121,29 @@ configurations header by header against Express.
   are compiled once; only delegates and origin callbacks run per request.
 
 > **Warning:** `origin: true` reflects any origin. Combined with
-> `credentials: true`, any website can make credentialed requests and read the
-> responses. Use an allowlist for credentialed APIs.
+> `credentials: true` (or its alias `allowCredentials: true`), any website can
+> make credentialed requests and read the responses. Use an allowlist for
+> credentialed APIs.
 
-The only difference from Express is that a `204` preflight carries no
-`Content-Length` header, as RFC 9110 requires.
+Differences from Express: a `204` preflight carries no `Content-Length`
+header, as RFC 9110 requires; `methods: undefined` sends no
+`Access-Control-Allow-Methods` and `optionsSuccessStatus: undefined` falls back
+to `204`, where `cors` fails the preflight with a 500; and
+`allowCredentials: true` is accepted as an alias of `credentials: true`.
 
-Earlier releases of these adapters behaved differently: `origin: true` sent
-`*`, the origin callback was skipped for requests without an `Origin` header,
-only `OPTIONS` requests with `Access-Control-Request-Method` were treated as
-preflights, and a fixed list of allowed headers was sent. Review CORS
-configurations when upgrading. `allowCredentials: true` from those releases is
-still accepted as an alias of `credentials: true`.
+Earlier releases of these adapters behaved differently. Review CORS
+configurations when upgrading:
+
+- a missing or `undefined` `origin`, and `origin: true`, sent `*`;
+- a `CorsOptionsDelegate` was ignored, so every origin got `*`;
+- the origin callback was skipped for requests without an `Origin` header;
+- `methods`, `allowedHeaders` and `exposedHeaders` only took arrays, and
+  string values were ignored; the default methods included `OPTIONS`;
+- only `OPTIONS` requests with `Access-Control-Request-Method` were treated
+  as preflights, always answered `204`, ignoring `preflightContinue` and
+  `optionsSuccessStatus`;
+- without an `Access-Control-Request-Headers` header, a fixed list of allowed
+  headers was sent, and `Vary` was overwritten instead of appended.
 
 ### Cookies
 
@@ -153,7 +166,9 @@ Express semantics:
 - objects become `j:`-prefixed JSON and other values are stringified;
 - `maxAge` is in **milliseconds** and also sets `Expires`, while `null` leaves
   it out (Nest's `httpAdapter.setCookie()` takes `maxAge` in seconds);
-- `null` or `false` attributes are left out, and `sameSite: true` means `Strict`;
+- `null` `domain`, `expires`, `priority` and `sameSite` are left out (also
+  when `false`), `sameSite: true` means `Strict`, and a falsy `path` sends an
+  empty `Path=`, which browsers treat like Express's missing Path;
 - `signed: true` uses the secret `cookie-parser` set, as Express does, and
   otherwise `cookies.secret`.
 

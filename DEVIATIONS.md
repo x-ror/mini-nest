@@ -18,15 +18,18 @@ history, not active workspace packages.
   native `File` values in `@Body()`. Basic static file serving is supported
   through the adapter middleware API. CORS mirrors the `cors` package used by
   Nest's Express adapter (option merging, headers, `Vary`, preflight
-  handling), except that a `204` preflight omits `Content-Length`; the
-  adapters also accept the `allowCredentials` alias of earlier releases.
+  handling), except that a `204` preflight omits `Content-Length`,
+  `methods: undefined` and `optionsSuccessStatus: undefined` do not fail the
+  preflight, static options are read once, and the `allowCredentials` alias of
+  earlier releases is still accepted.
   Cookies use Nest 12's own API: `@Cookies()`, `@SignedCookies()`,
   `setCookie()`/`clearCookie()` and `cookies.secret` work unchanged. As on
   Express, `req.cookies` and `req.signedCookies` are left to `cookie-parser`,
   which works unchanged. `res.cookie()`/`res.clearCookie()` follow Express,
-  except that they can also sign with `cookies.secret`, Nest's serializer
-  rejects `sameSite: "none"` and `partitioned` without `secure`, and the
-  `encode` option throws.
+  except that they can also sign with `cookies.secret`, a falsy `path` sends
+  an empty `Path=` instead of none, Nest's serializer rejects
+  `sameSite: "none"` and `partitioned` without `secure`, and the `encode`
+  option throws. `res.vary()` skips empty entries where `vary` throws.
 - `path-to-regexp` is a deliberate routing dependency; maintaining a custom
   path grammar would add unnecessary compatibility risk.
 - Middleware path normalization uses Nest's internal `LegacyRouteConverter`,

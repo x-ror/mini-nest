@@ -166,6 +166,8 @@ class TestController {
       .cookie("strict", "y", { sameSite: true, priority: "high" })
       .cookie("ttl", "z", { maxAge: 90_000, path: "/api" })
       .clearCookie("gone")
+      .clearCookie("gone-too", { maxAge: 5000, domain: "example.com" })
+      .cookie("own", "v", Object.create({ maxAge: 1000, path: "/inherited" }) as object)
       .json({ edge: true });
   }
   /** Express signs with `cookie-parser`'s secret; only compared when it is installed. */

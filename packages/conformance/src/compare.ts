@@ -172,6 +172,9 @@ const corsConfigurations: [string, CorsOptions | typeof corsDelegate | undefined
   ["empty lists", { methods: [], allowedHeaders: "", exposedHeaders: [] }],
   ["empty header array", { allowedHeaders: [] }],
   ["headers alias", { headers: ["x-alias"] } as CorsOptions],
+  // Boxed strings: cors treats them as strings (fixed value, or never equal in a list).
+  ["boxed string", { origin: new String("https://exact.example") as string, credentials: true }],
+  ["boxed string list", { origin: [new String("https://exact.example") as string] }],
   ["preflight continue", { origin: "https://exact.example", preflightContinue: true }],
   ["delegate", corsDelegate],
   [
@@ -180,7 +183,11 @@ const corsConfigurations: [string, CorsOptions | typeof corsDelegate | undefined
       origin: (origin, callback) => {
         if (origin === "https://err.example") return callback(new Error("origin denied"));
         if (origin === "https://cb.example") return callback(null, true);
-        callback(null, origin === undefined ? false : ["https://exact.example"]);
+        // A distinct answer shows that the callback also runs without an Origin header.
+        callback(
+          null,
+          origin === undefined ? "https://no-origin.example" : ["https://exact.example"],
+        );
       },
       credentials: true,
     },
@@ -190,11 +197,13 @@ const corsConfigurations: [string, CorsOptions | typeof corsDelegate | undefined
 /** Express (`cookie`) and Nest (`serializeCookie`) order attributes differently. */
 function normalizeSetCookie(header: string): string {
   const [pair, ...attributes] = header.split(";").map((part) => part.trim());
-  // With Max-Age, Expires is derived from the clock: only check that it is a date.
-  const relative = attributes.some((attribute) => attribute.startsWith("Max-Age="));
+  const maxAge = attributes.find((attribute) => attribute.startsWith("Max-Age="));
+  // With Max-Age, Expires is derived from the clock: check it lies Max-Age from now.
   const stable = attributes.map((attribute) => {
-    if (!relative || !attribute.startsWith("Expires=")) return attribute;
-    return Number.isNaN(Date.parse(attribute.slice(8))) ? attribute : "Expires=<relative>";
+    if (!maxAge || !attribute.startsWith("Expires=")) return attribute;
+    const expected = Date.now() + Number(maxAge.slice(8)) * 1000;
+    const drift = Math.abs(Date.parse(attribute.slice(8)) - expected);
+    return drift <= 5000 ? "Expires=<Max-Age from now>" : attribute;
   });
   return [pair, ...stable.sort()].join("; ");
 }

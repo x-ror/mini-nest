@@ -22,6 +22,7 @@ export {
 } from "@shared";
 
 export type {
+  CookieWriter,
   NativeAdapterOptions,
   NativeRequest,
   ResponseCookieOptions,
