@@ -3,6 +3,7 @@ import {
   BadRequestException,
   Body,
   Controller,
+  Cookies,
   Get,
   Header,
   HttpCode,
@@ -17,6 +18,7 @@ import {
   Redirect,
   Req,
   Res,
+  SignedCookies,
   Sse,
   StreamableFile,
   UseGuards,
@@ -32,8 +34,13 @@ import {
   type OnModuleInit,
   type OnModuleDestroy,
 } from "@nestjs/common";
+import { HttpAdapterHost } from "@nestjs/core";
 import { interval, map, take } from "rxjs";
 import type { NativeRequest, NativeResponse } from "nestjs-adapter-node";
+
+/** Fixed so `Expires` is stable across both adapters. */
+const COOKIE_EXPIRES = new Date("2030-01-01T00:00:00Z");
+export const COOKIE_SECRET = "fixture-cookie-secret";
 
 @Injectable()
 export class GreetingService implements OnModuleInit, OnModuleDestroy {
@@ -71,7 +78,10 @@ class HeaderMiddleware implements NestMiddleware {
 
 @Controller("api")
 class TestController {
-  constructor(@Inject(GreetingService) private readonly greeting: GreetingService) {}
+  constructor(
+    @Inject(GreetingService) private readonly greeting: GreetingService,
+    @Inject(HttpAdapterHost) private readonly host: HttpAdapterHost,
+  ) {}
   @Get() index() {
     return { message: this.greeting.message() };
   }
@@ -123,6 +133,65 @@ class TestController {
   @Get("cookies") cookies(@Res() response: NativeResponse) {
     response.setHeader("set-cookie", ["a=1; Path=/", "b=2; Path=/"]);
     response.json({ cookies: true });
+  }
+  /** Express `res.cookie()` / `res.clearCookie()`, as a migrated `@Res()` handler would use. */
+  @Get("cookies/express") expressCookies(@Res() response: NativeResponse) {
+    response
+      .cookie("session", "abc 123", {
+        httpOnly: true,
+        secure: true,
+        sameSite: "none",
+        expires: COOKIE_EXPIRES,
+      })
+      .cookie("prefs", { theme: "dark" }, { path: "/api" })
+      .clearCookie("old", { path: "/api" })
+      .json({ set: true });
+  }
+  /** Nest's adapter-level `setCookie()`, signed with the application secret. */
+  @Get("cookies/signed") signedCookie(@Res() response: NativeResponse) {
+    this.host.httpAdapter.setCookie(response, "token", "user-42", {
+      signed: true,
+      httpOnly: true,
+      expires: COOKIE_EXPIRES,
+    });
+    response.json({ signed: true });
+  }
+  /** Express's lenient `res.cookie()` inputs: primitives, `null` attributes, `sameSite: true`. */
+  @Get("cookies/express-edge") expressEdgeCookies(@Res() response: NativeResponse) {
+    response
+      .cookie("visits", 5)
+      .cookie("remember", true)
+      .cookie("nothing", null)
+      .cookie("sid", "x", { maxAge: null, domain: null, priority: null, sameSite: false })
+      .cookie("strict", "y", { sameSite: true, priority: "high" })
+      .cookie("ttl", "z", { maxAge: 90_000, path: "/api" })
+      .clearCookie("gone")
+      .clearCookie("gone-too", { maxAge: 5000, domain: "example.com" })
+      .cookie("own", "v", Object.create({ maxAge: 1000, path: "/inherited" }) as object)
+      .json({ edge: true });
+  }
+  /** Express signs with `cookie-parser`'s secret; only compared when it is installed. */
+  @Get("cookies/express-signed") expressSignedCookies(@Res() response: NativeResponse) {
+    response
+      .cookie("token", "user-42", { signed: true, httpOnly: true, expires: COOKIE_EXPIRES })
+      .cookie("prefs", { theme: "dark" }, { signed: true })
+      .clearCookie("stale", { signed: true, path: "/api" })
+      .json({ signed: true });
+  }
+  /** What `cookie-parser` (when installed) leaves on the request. */
+  @Get("cookies/parser") parserCookies(@Req() req: NativeRequest) {
+    return {
+      cookies: req.cookies ?? null,
+      signedCookies: req.signedCookies ?? null,
+      secret: typeof req.secret,
+    };
+  }
+  @Get("cookies/read") readCookies(
+    @Cookies() cookies: Record<string, string>,
+    @Cookies("theme") theme: string | undefined,
+    @SignedCookies("token") token: string | undefined,
+  ) {
+    return { cookies, theme, token: token ?? null };
   }
   @Get("file") file() {
     return new StreamableFile(Buffer.from("native stream"));

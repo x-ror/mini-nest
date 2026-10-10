@@ -14,6 +14,8 @@ jobs:
           node-version: ${{ matrix.node }}
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      # Tests and examples type-check against the packages' built declarations.
+      - run: pnpm run build
       - run: pnpm run check
       - run: pnpm run test
   bun:

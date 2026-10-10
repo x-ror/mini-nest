@@ -14,6 +14,15 @@ export interface NativeRequest {
   query: Record<string, string | string[]>;
   body?: unknown;
   rawBody?: Buffer;
+  /**
+   * Set by `cookie-parser` when the application installs it, exactly as on
+   * Express. Nest's `@Cookies()` and `@SignedCookies()` do not need it.
+   */
+  cookies?: Record<string, any>;
+  /** Set by `cookie-parser`; see `cookies`. */
+  signedCookies?: Record<string, any>;
+  /** The first secret given to `cookie-parser`, when it is installed. */
+  secret?: string;
 }
 
 // Prototype-free like new NullObject(), but stays a fast-mode V8 object:

@@ -9,7 +9,10 @@ import { NestFactory } from "@nestjs/core";
 import { compareAdapters, startFixture } from "./compare.js";
 import { FixtureModule } from "./fixture.js";
 
-await compareAdapters(new BunHttpAdapter(), new ExpressAdapter());
+await compareAdapters(
+  () => new BunHttpAdapter(),
+  () => new ExpressAdapter(),
+);
 
 const adapter = new BunHttpAdapter();
 const app = await NestFactory.create(FixtureModule, adapter, {

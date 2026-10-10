@@ -8,6 +8,7 @@ import {
   NativeResponse,
   NullObject,
   parseQuery,
+  type CookieWriter,
   type NativeRequest,
   type ResponseBody,
 } from "@shared";
@@ -20,7 +21,14 @@ export {
   NativeResponse,
 } from "@shared";
 
-export type { NativeAdapterOptions, NativeRequest, UploadedFileData, ViewRenderer } from "@shared";
+export type {
+  CookieWriter,
+  NativeAdapterOptions,
+  NativeRequest,
+  ResponseCookieOptions,
+  UploadedFileData,
+  ViewRenderer,
+} from "@shared";
 
 const EMPTY_BODY = Buffer.alloc(0);
 
@@ -119,8 +127,10 @@ class NodeResponse extends NativeResponse {
   constructor(
     method: string,
     private readonly outgoing: ServerResponse,
+    cookies: CookieWriter,
+    request: NativeRequest,
   ) {
-    super(method);
+    super(method, cookies, request);
   }
   override on(event: string, listener: (...args: any[]) => void): this {
     this.outgoing.on(event, listener);
@@ -158,7 +168,7 @@ export class NodeHttpAdapter extends NativeHttpAdapter<Server> {
     this.forceCloseConnections = options.forceCloseConnections ?? false;
     const listener = (incoming: IncomingMessage, outgoing: ServerResponse): void => {
       const request = new NodeRequest(incoming, outgoing);
-      this.dispatch(request, new NodeResponse(request.method, outgoing));
+      this.dispatch(request, new NodeResponse(request.method, outgoing, this, request));
     };
     this.httpServer = options.httpsOptions
       ? createSecureServer(options.httpsOptions, listener)
