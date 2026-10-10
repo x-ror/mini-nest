@@ -18,8 +18,10 @@ history, not active workspace packages.
   `trust proxy` semantics (`trustProxy` option or `app.set("trust proxy")`),
   off by default; Express's `req.secure`, `req.host` and `req.subdomains` are
   not provided. Multipart files are
-  native `File` values in `@Body()`. Basic static file serving is supported
-  through the adapter middleware API. CORS mirrors the `cors` package used by
+  native `File` values in `@Body()`. Static files follow `express.static()`
+  (serve-static and send), except that content types come from a built-in
+  table of common web types, and on Bun a full response to a request with a
+  `Range` header is sent without `Content-Length` above 1 MiB. CORS mirrors the `cors` package used by
   Nest's Express adapter (option merging, headers, `Vary`, preflight
   handling), except that a `204` preflight omits `Content-Length`,
   `methods: undefined` and `optionsSuccessStatus: undefined` do not fail the

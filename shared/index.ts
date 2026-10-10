@@ -1,7 +1,6 @@
 import { existsSync } from "node:fs";
-import { readFile, stat } from "node:fs/promises";
 import { createRequire } from "node:module";
-import { extname, isAbsolute, relative, resolve, sep } from "node:path";
+import { extname, resolve } from "node:path";
 import { AbstractHttpAdapter } from "@nestjs/core";
 import { LegacyRouteConverter } from "@nestjs/core/internal";
 import {
@@ -31,6 +30,7 @@ import {
 } from "./request.js";
 import { NativeResponse } from "./response.js";
 import { compileTrust, type TrustFunction, type TrustProxy } from "./proxy.js";
+import { serveStatic, type StaticAssetsOptions } from "./static.js";
 
 export { NativeResponse } from "./response.js";
 export {
@@ -41,6 +41,7 @@ export {
   type UploadedFileData,
 } from "./uploads.js";
 export { NullObject, parseQuery } from "./request.js";
+export type { StaticAssetsOptions } from "./static.js";
 export {
   hostnameOf,
   resolveProxy,
@@ -252,6 +253,19 @@ export abstract class NativeHttpAdapter<TServer> extends AbstractHttpAdapter<
   }
   reply(response: NativeResponse, body: unknown, code?: number): NativeResponse {
     if (code !== undefined) response.status(code);
+    // Like Nest's ExpressAdapter: an error body must not go out under a non-JSON
+    // type left by middleware (e.g. a static file's text/plain before a 412).
+    const contentType = response.getHeader("content-type");
+    if (
+      typeof contentType === "string" &&
+      !isJsonContentType(contentType) &&
+      ((body as { statusCode?: unknown } | null)?.statusCode as number) >= 400
+    ) {
+      new Logger(NativeHttpAdapter.name).warn(
+        "Content-Type doesn't match Reply body, you might need a custom ExceptionFilter for non-JSON responses",
+      );
+      response.setHeader("content-type", "application/json; charset=utf-8");
+    }
     return response.send(body);
   }
   end(response: NativeResponse, message?: string): NativeResponse {
@@ -378,78 +392,17 @@ export abstract class NativeHttpAdapter<TServer> extends AbstractHttpAdapter<
     if (!compiled.origin) return;
     this.use((req, res, next) => handleCors(compiled, req, res, next));
   }
+  /**
+   * Nest's `app.useStaticAssets(root, options)`, implemented like
+   * `express.static()` (serve-static and send); see `StaticAssetsOptions`.
+   */
   useStaticAssets(
-    root: string | { root?: string; prefix?: string; index?: string; maxAge?: number },
-    options: { prefix?: string; index?: string; maxAge?: number } = {},
+    root: string | (StaticAssetsOptions & { root?: string }),
+    options: StaticAssetsOptions = {},
   ): this {
     const resolvedRoot = typeof root === "string" ? root : (root.root ?? process.cwd());
     const resolvedOptions = typeof root === "string" ? options : { ...root, ...options };
-    const prefix = resolvedOptions.prefix ?? "/";
-    const indexName = resolvedOptions.index ?? "index.html";
-    const rootPath = resolve(resolvedRoot);
-    const fileExtensionContentType = (filePath: string): string => {
-      const extension = extname(filePath).toLowerCase();
-      switch (extension) {
-        case ".html":
-          return "text/html; charset=utf-8";
-        case ".css":
-          return "text/css; charset=utf-8";
-        case ".js":
-          return "application/javascript; charset=utf-8";
-        case ".json":
-          return "application/json; charset=utf-8";
-        case ".svg":
-          return "image/svg+xml";
-        case ".txt":
-          return "text/plain; charset=utf-8";
-        case ".png":
-          return "image/png";
-        case ".jpg":
-        case ".jpeg":
-          return "image/jpeg";
-        case ".webp":
-          return "image/webp";
-        case ".gif":
-          return "image/gif";
-        case ".ico":
-          return "image/x-icon";
-        default:
-          return "application/octet-stream";
-      }
-    };
-    this.use(async (req, res, next) => {
-      if (req.method !== "GET" && req.method !== "HEAD") return next();
-      const normalizedPrefix = prefix === "/" ? "/" : prefix.replace(/\/+$/, "");
-      if (normalizedPrefix !== "/" && !req.path.startsWith(normalizedPrefix)) return next();
-      const rawPath =
-        normalizedPrefix === "/" ? req.path : req.path.slice(normalizedPrefix.length) || "/";
-      const safePath = rawPath === "/" ? indexName : rawPath.replace(/^\/+/, "");
-      const targetPath = resolve(rootPath, safePath);
-      const relativeToRoot = relative(rootPath, targetPath);
-      if (
-        isAbsolute(safePath) ||
-        isAbsolute(relativeToRoot) ||
-        relativeToRoot === ".." ||
-        relativeToRoot.startsWith(`..${sep}`) ||
-        !(targetPath === rootPath || targetPath.startsWith(rootPath + sep))
-      )
-        return next();
-      try {
-        const stats = await stat(targetPath);
-        const filePath = stats.isDirectory() ? resolve(targetPath, indexName) : targetPath;
-        const fileStats = await stat(filePath);
-        if (!fileStats.isFile()) return next();
-        const bytes = await readFile(filePath);
-        if (typeof resolvedOptions.maxAge === "number")
-          res.setHeader("cache-control", `public, max-age=${resolvedOptions.maxAge}`);
-        res.setHeader("content-type", fileExtensionContentType(filePath));
-        if (req.method === "HEAD") return res.status(200).end();
-        res.status(200).send(bytes);
-      } catch {
-        return next();
-      }
-    });
-    return this;
+    return this.use(serveStatic(resolvedRoot, resolvedOptions));
   }
   setBaseViewsDir(path: string | string[]): this {
     this.viewsDirs = ([] as string[]).concat(path);
@@ -665,4 +618,10 @@ function applyCors(
     return;
   }
   next();
+}
+
+/** Nest ExpressAdapter's check: `application/json*` or a `+json` suffix. */
+function isJsonContentType(contentType: string): boolean {
+  const mediaType = contentType.split(";")[0]!.trim().toLowerCase();
+  return mediaType.startsWith("application/json") || mediaType.endsWith("+json");
 }

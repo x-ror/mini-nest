@@ -25,7 +25,7 @@ class NativeSseResponse extends PassThrough {
 }
 
 type OutgoingHeaders = Record<string, number | string | readonly string[]>;
-export type ResponseBody = string | Uint8Array | Readable | null;
+export type ResponseBody = string | Uint8Array | Readable | Blob | null;
 /** Express `res.cookie()` options: `maxAge` is in **milliseconds** here. */
 export interface ResponseCookieOptions extends Omit<
   CookieSerializeOptions,
@@ -243,6 +243,12 @@ export class NativeResponse {
       if (metadata.disposition) this.setHeader("content-disposition", metadata.disposition);
       if (metadata.length !== undefined) headers["content-length"] = String(metadata.length);
       return this.finish(value.getStream());
+    }
+    // A Blob (e.g. from fs.openAsBlob) keeps its size, so Bun can send Content-Length.
+    if (value instanceof Blob) {
+      headers["content-type"] ??= value.type || "application/octet-stream";
+      headers["content-length"] ??= String(value.size);
+      return this.finish(value);
     }
     if (value instanceof Uint8Array) {
       headers["content-type"] ??= "application/octet-stream";

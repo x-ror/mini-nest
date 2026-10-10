@@ -2,6 +2,7 @@
   "name": "nest-native-adapters",
   "version": "0.1.0",
   "private": true,
+  "license": "0BSD",
   "type": "module",
   "scripts": {
     "dev": "vp pack --filter example --watch --on-success \"node dist/server.js\"",

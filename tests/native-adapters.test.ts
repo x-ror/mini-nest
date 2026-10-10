@@ -452,6 +452,46 @@ describe("native Nest adapters", () => {
       await rm(staticDir, { recursive: true, force: true });
     }
   });
+  it("streams large static files with validators, ranges and Express maxAge units", async () => {
+    const dir = join(process.cwd(), "tmp-static-large");
+    const size = 2 * 1024 * 1024 + 7;
+    const bytes = Buffer.alloc(size, 0);
+    for (let i = 0; i < size; i++) bytes[i] = i % 251;
+    try {
+      await mkdir(dir, { recursive: true });
+      await writeFile(join(dir, "big.bin"), bytes);
+      const adapter = new NodeHttpAdapter();
+      const app = await NestFactory.create(FixtureModule, adapter, { logger: false });
+      apps.push(app);
+      adapter.useStaticAssets(dir, { prefix: "/files", maxAge: 60_000 });
+      await app.listen(0, "127.0.0.1");
+      const base = await app.getUrl();
+      for (const get of [
+        (path: string, headers?: Record<string, string>) => fetch(`${base}${path}`, { headers }),
+        (path: string, headers?: Record<string, string>) =>
+          adapter.fetch(new Request(`http://localhost${path}`, { headers })),
+      ]) {
+        const full = await get("/files/big.bin");
+        expect(full.status).toBe(200);
+        // maxAge is in milliseconds, as on Express.
+        expect(full.headers.get("cache-control")).toBe("public, max-age=60");
+        expect(full.headers.get("content-length")).toBe(String(size));
+        expect(Buffer.from(await full.arrayBuffer()).equals(bytes)).toBe(true);
+        const part = await get("/files/big.bin", { range: "bytes=1048576-1048585" });
+        expect(part.status).toBe(206);
+        expect(part.headers.get("content-range")).toBe(`bytes 1048576-1048585/${size}`);
+        expect(Buffer.from(await part.arrayBuffer()).equals(bytes.subarray(1048576, 1048586))).toBe(
+          true,
+        );
+        // A range the server ignores (two ranges) still sends the whole file.
+        const ignored = await get("/files/big.bin", { range: "bytes=0-1,10-11" });
+        expect(ignored.status).toBe(200);
+        expect((await ignored.arrayBuffer()).byteLength).toBe(size);
+      }
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
   it("fails closed for CORS allowlists and rejects absolute static paths", async () => {
     const adapter = new NodeHttpAdapter();
     adapter.enableCors({

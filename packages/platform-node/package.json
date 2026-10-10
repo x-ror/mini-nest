@@ -1,10 +1,31 @@
 {
   "name": "nestjs-adapter-node",
   "version": "0.1.0",
+  "description": "Native node:http HTTP adapter for NestJS: real Nest on Node.js without Express or Fastify.",
+  "keywords": [
+    "adapter",
+    "http",
+    "http-adapter",
+    "nest",
+    "nestjs",
+    "node",
+    "node:http"
+  ],
+  "homepage": "https://github.com/x-ror/nest-native-adapters#readme",
+  "bugs": {
+    "url": "https://github.com/x-ror/nest-native-adapters/issues"
+  },
+  "license": "0BSD",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/x-ror/nest-native-adapters.git",
+    "directory": "packages/platform-node"
+  },
   "files": [
     "dist"
   ],
   "type": "module",
+  "sideEffects": false,
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -12,11 +33,18 @@
       "default": "./dist/index.js"
     }
   },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
   "dependencies": {
     "path-to-regexp": "catalog:"
   },
   "peerDependencies": {
     "@nestjs/common": "catalog:nest-peers",
     "@nestjs/core": "catalog:nest-peers"
+  },
+  "engines": {
+    "node": ">=22"
   }
 }

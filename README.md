@@ -13,34 +13,34 @@ decorators, guards, pipes, interceptors, exception filters, and application life
 
 The two adapters include shared router, request parsing, and response code in their builds.
 `shared/` is internal source, not a separate npm package.
-Run `pnpm run build` before packing or publishing either adapter; only `dist/` is shipped. Packages are not published to npm yet. Supported baseline:
+Run `pnpm run build` before packing or publishing either adapter; only `dist/` is shipped. Packages are not published to npm yet; see Releasing below. Supported baseline:
 NestJS **12.1.2**, Node.js 22+, current Bun. Other Nest versions are not yet verified.
 Neither adapter uses Express or Fastify. Express is a test-only reference and
 Fastify a benchmark-only one.
 
 ## Compatibility matrix
 
-| Capability                                           | Node adapter  | Bun adapter   | Notes                                                        |
-| ---------------------------------------------------- | ------------- | ------------- | ------------------------------------------------------------ |
-| Nest baseline                                        | Verified      | Verified      | NestJS 12.1.2; other versions are unverified                 |
-| Runtime                                              | Node.js 22+   | Current Bun   | Bun uses `Bun.serve`                                         |
-| Routing, middleware, guards, pipes, interceptors, DI | Supported     | Supported     | Shared adapter implementation                                |
-| JSON and nested URL-encoded bodies                   | Supported     | Supported     | Parsed body limit defaults to 100 KiB                        |
-| Multipart forms                                      | Supported     | Supported     | Files are native `File` values on `@Body()`                  |
-| CORS                                                 | Supported     | Supported     | Same options and headers as `cors` (Express)                 |
-| Trusted proxies (`X-Forwarded-*`)                    | Supported     | Supported     | Express's `trust proxy`: `ip`, `ips`, `protocol`, `hostname` |
-| Cookies                                              | Supported     | Supported     | Nest's cookie API, `res.cookie()`, `cookie-parser`           |
-| Static assets                                        | Basic support | Basic support | Not a replacement for dedicated integrations/CDNs            |
-| Text, raw and custom-type bodies                     | Supported     | Supported     | Opt in with `app.useBodyParser(...)`                         |
-| Header, media-type and custom versioning             | Supported     | Supported     | Same per-handler matching as Nest's Express adapter          |
-| Nest `@Sse()`                                        | Supported     | Supported     | Observable `MessageEvent` stream                             |
-| Streamed responses with `res.write()`                | Supported     | Supported     | Chunked; headers are sent on the first write                 |
-| Response events (`res.on("finish")`)                 | Supported     | Not supported | Forwarded to Node's `ServerResponse`                         |
-| TLS / HTTPS                                          | Supported     | Untested      | Nest `httpsOptions`; Bun reads key, cert, ca and passphrase  |
-| WebSocket gateways                                   | Supported     | Supported     | Node: Nest's `WsAdapter`; Bun: `BunWsAdapter`                |
-| Socket.IO gateways                                   | Supported     | Not supported | Automatic on Node; under Bun use the Node adapter            |
-| File upload interceptors                             | Supported     | Supported     | `FileInterceptor` and friends; memory storage only           |
-| MVC (`@Render()`)                                    | Supported     | Supported     | Express-compatible engines (`ejs`, `pug`, `hbs`)             |
+| Capability                                           | Node adapter | Bun adapter   | Notes                                                        |
+| ---------------------------------------------------- | ------------ | ------------- | ------------------------------------------------------------ |
+| Nest baseline                                        | Verified     | Verified      | NestJS 12.1.2; other versions are unverified                 |
+| Runtime                                              | Node.js 22+  | Current Bun   | Bun uses `Bun.serve`                                         |
+| Routing, middleware, guards, pipes, interceptors, DI | Supported    | Supported     | Shared adapter implementation                                |
+| JSON and nested URL-encoded bodies                   | Supported    | Supported     | Parsed body limit defaults to 100 KiB                        |
+| Multipart forms                                      | Supported    | Supported     | Files are native `File` values on `@Body()`                  |
+| CORS                                                 | Supported    | Supported     | Same options and headers as `cors` (Express)                 |
+| Trusted proxies (`X-Forwarded-*`)                    | Supported    | Supported     | Express's `trust proxy`: `ip`, `ips`, `protocol`, `hostname` |
+| Cookies                                              | Supported    | Supported     | Nest's cookie API, `res.cookie()`, `cookie-parser`           |
+| Static assets                                        | Supported    | Supported     | `express.static` options, validators and byte ranges         |
+| Text, raw and custom-type bodies                     | Supported    | Supported     | Opt in with `app.useBodyParser(...)`                         |
+| Header, media-type and custom versioning             | Supported    | Supported     | Same per-handler matching as Nest's Express adapter          |
+| Nest `@Sse()`                                        | Supported    | Supported     | Observable `MessageEvent` stream                             |
+| Streamed responses with `res.write()`                | Supported    | Supported     | Chunked; headers are sent on the first write                 |
+| Response events (`res.on("finish")`)                 | Supported    | Not supported | Forwarded to Node's `ServerResponse`                         |
+| TLS / HTTPS                                          | Supported    | Untested      | Nest `httpsOptions`; Bun reads key, cert, ca and passphrase  |
+| WebSocket gateways                                   | Supported    | Supported     | Node: Nest's `WsAdapter`; Bun: `BunWsAdapter`                |
+| Socket.IO gateways                                   | Supported    | Not supported | Automatic on Node; under Bun use the Node adapter            |
+| File upload interceptors                             | Supported    | Supported     | `FileInterceptor` and friends; memory storage only           |
+| MVC (`@Render()`)                                    | Supported    | Supported     | Express-compatible engines (`ejs`, `pug`, `hbs`)             |
 
 ## Usage
 
@@ -88,8 +88,8 @@ Express-compatible view engines: `app.setBaseViewsDir(dir)` (default `./views`)
 and `app.setViewEngine("ejs")`, or pass `{ extension, render }` with any
 `(path, options, callback)` function. Express `app.locals` and view caching
 settings are not provided. `@Sse()` streams Nest
-`MessageEvent` values as `text/event-stream`. Basic static file serving is
-supported through the adapter middleware API. Unsupported adapter
+`MessageEvent` values as `text/event-stream`. `app.useStaticAssets()` serves
+files like `express.static()` (see Static files below). Unsupported adapter
 configuration throws instead of silently doing nothing. Do not assume browser
 cross-origin access is enabled: call `app.enableCors()` as on Express.
 
@@ -218,9 +218,8 @@ transport-specific code before replacing the platform adapter:
   the `cors` package. Keep `cookie-parser` if middleware or guards read
   `req.cookies`; `res.cookie()` and `res.clearCookie()` behave as on Express.
   Nest's `@Cookies()` and `@SignedCookies()` need no middleware.
-- Register static assets through the adapter API and test any
-  framework-specific options; the implementation intentionally provides a
-  smaller feature set than the corresponding Express/Fastify integrations.
+- Keep `app.useStaticAssets(root, options)`: it takes `express.static()`
+  options, including `maxAge` in milliseconds.
 - Pass Nest `httpsOptions` for native HTTPS, or terminate TLS at a reverse
   proxy. Keep `app.set("trust proxy", ...)` as is, or pass the same value as
   the `trustProxy` adapter option.
@@ -285,6 +284,37 @@ server {
 
 If using the `1m` proxy limit, configure the adapter with
 `{ bodyLimit: 1024 * 1024 }`.
+
+### Static files
+
+`app.useStaticAssets(root, options)` behaves like `express.static()`, which
+Nest's Express adapter uses, and the conformance suite compares four option
+sets header by header against it:
+
+- `ETag` and `Last-Modified` validators, with `If-None-Match` /
+  `If-Modified-Since` answered `304` and failed `If-Match` /
+  `If-Unmodified-Since` answered `412`;
+- single byte ranges answered `206` (several ranges, a malformed header or a
+  stale `If-Range` send the whole file, as in `send`), and unsatisfiable ones
+  `416`;
+- `Cache-Control: public, max-age=…` from `maxAge` in **milliseconds** or a
+  duration such as `"1d"`, plus `immutable`;
+- dotfiles hidden by default (`dotfiles: "allow" | "deny" | "ignore"`), a `301`
+  redirect for a directory requested without its trailing slash, `index`,
+  `extensions`, `setHeaders`, `fallthrough`, `etag`, `lastModified`,
+  `cacheControl` and `acceptRanges`;
+- the `prefix` is matched per path segment, case-insensitively, like an
+  Express mount path: `/assets` serves `/assets/app.js` but not `/assetsapp.js`.
+
+Content types come from a built-in table that matches Express for common web
+files; other extensions are sent as `application/octet-stream`. Files are
+streamed from disk. On Bun, a full file sent although the request had a
+`Range` header goes out without `Content-Length` when it is larger than 1 MiB,
+because Bun would otherwise apply the range itself.
+
+Earlier releases read `maxAge` in seconds, sent no validators and buffered
+whole files; `maxAge` now follows Express (milliseconds), so multiply old
+values by 1000.
 
 ### Trusted proxies
 
@@ -371,9 +401,8 @@ Other integrations can share the Bun server through
 
 - Multipart uploads are parsed into in-memory native `File` values and are
   subject to `bodyLimit`; the adapter does not spool uploaded files to disk.
-- Static files are read into memory for each request. Restrict the configured
-  root to trusted public assets; use a dedicated static server or CDN for large
-  files or high-volume delivery.
+- Static files are read from disk as they are sent, not buffered. Restrict
+  the configured root to public assets; a CDN still suits high-volume delivery.
 - For SSE behind Nginx, keep response buffering disabled for the SSE location
   and set `proxy_read_timeout` to match the expected idle interval. The adapter
   sends `X-Accel-Buffering: no`, but proxy configuration controls end-to-end
@@ -441,3 +470,21 @@ is retained only in Git history; its phases no longer describe this project's
 roadmap.
 
 Repository: <https://github.com/x-ror/nest-native-adapters>
+
+## Releasing
+
+Both packages share one version, recorded in `CHANGELOG.md`.
+
+1. Set the same `version` in `packages/platform-node/package.json` and
+   `packages/platform-bun/package.json`, and move the changelog's
+   Unreleased entries under that version.
+2. Push a tag `v<version>`. The Release workflow builds, runs the full
+   check, test and Bun suites, checks that the tag matches both packages and
+   that a license is set, then publishes both packages to npm with
+   provenance. It needs an `NPM_TOKEN` secret in a GitHub environment named
+   `npm`.
+
+## License
+
+[0BSD](LICENSE): use, copy, modify and distribute for any purpose, with or
+without attribution.

@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { mkdtemp, mkdir, rm, stat, utimes, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { basename, join } from "node:path";
 import cookieParser from "cookie-parser";
 import { NestFactory, type AbstractHttpAdapter } from "@nestjs/core";
 import { VersioningType, type INestApplication } from "@nestjs/common";
@@ -228,6 +231,128 @@ const trustConfigurations: [string, unknown][] = [
   ["function", (address: string | undefined, hop: number) => hop < 3 && address !== "203.0.113.7"],
 ];
 
+/** Files served by the static suite; mtimes are pinned so validators are stable. */
+async function createStaticRoot(): Promise<{ root: string; etag: string; lastModified: string }> {
+  const root = await mkdtemp(join(tmpdir(), "native-static-"));
+  const files: Record<string, string | Buffer> = {
+    "index.html": "<h1>home</h1>",
+    "app.js": "console.log('static');",
+    "style.css": "body{}",
+    "data.json": '{"a":1}',
+    "notes.txt": "0123456789abcdefghij",
+    "image.png": Buffer.from([0x89, 0x50, 0x4e, 0x47, 1, 2, 3, 4]),
+    "favicon.ico": Buffer.from([0, 0, 1, 0]),
+    noext: "plain",
+    "page.html": "<p>page</p>",
+    ".secret": "hidden",
+    "space name.txt": "spaced",
+    "sub/index.html": "<h1>sub</h1>",
+    "sub/item.html": "<p>item</p>",
+    ".hidden/file.txt": "inside dotdir",
+  };
+  const pinned = new Date("2024-01-02T03:04:05Z");
+  for (const [name, content] of Object.entries(files)) {
+    const file = join(root, name);
+    await mkdir(join(file, ".."), { recursive: true });
+    await writeFile(file, content);
+    await utimes(file, pinned, pinned);
+  }
+  const info = await stat(join(root, "notes.txt"));
+  return {
+    root,
+    etag: `W/"${info.size.toString(16)}-${info.mtime.getTime().toString(16)}"`,
+    lastModified: info.mtime.toUTCString(),
+  };
+}
+
+function staticCases(etag: string, lastModified: string): Case[] {
+  const notes = "/assets/notes.txt";
+  // fetch() adds Cache-Control: no-cache to conditional requests unless one is set,
+  // which (correctly) makes them stale; an explicit max-age=0 keeps them conditional.
+  return [
+    ["/assets/app.js"],
+    ["/assets/style.css"],
+    ["/assets/data.json"],
+    ["/assets/image.png"],
+    ["/assets/favicon.ico"],
+    ["/assets/noext"],
+    [notes, { method: "HEAD" }],
+    ["/assets/"],
+    ["/assets", { redirect: "manual" }],
+    ["/assets/sub", { redirect: "manual" }],
+    ["/assets/sub?x=1&y=%20", { redirect: "manual" }],
+    ["/assets/sub/"],
+    ["/assets/page"],
+    ["/assets/space%20name.txt"],
+    ["/assets/missing.txt"],
+    ["/assets/.secret"],
+    ["/assets/.hidden/file.txt"],
+    ["/assets/%2e%2e/%2e%2e/package.json"],
+    ["/assets/%zz"],
+    ["/assets/notes.txt%00.png"],
+    ["/ASSETS/app.js"],
+    ["/assetsx/app.js"],
+    ["/assetsapp.js"],
+    ["/assets/app.js", { method: "POST" }],
+    [notes, { headers: { "cache-control": "max-age=0", "if-none-match": etag } }],
+    [notes, { headers: { "cache-control": "max-age=0", "if-none-match": `"nope", ${etag}` } }],
+    [notes, { headers: { "if-none-match": etag, "cache-control": "no-cache" } }],
+    [notes, { headers: { "cache-control": "max-age=0", "if-modified-since": lastModified } }],
+    [
+      notes,
+      {
+        headers: {
+          "cache-control": "max-age=0",
+          "if-modified-since": "Mon, 01 Jan 2001 00:00:00 GMT",
+        },
+      },
+    ],
+    [notes, { headers: { "cache-control": "max-age=0", "if-match": '"nope"' } }],
+    [notes, { headers: { "cache-control": "max-age=0", "if-match": etag } }],
+    [
+      notes,
+      {
+        headers: {
+          "cache-control": "max-age=0",
+          "if-unmodified-since": "Mon, 01 Jan 2001 00:00:00 GMT",
+        },
+      },
+    ],
+    [notes, { headers: { range: "bytes=0-9" } }],
+    [notes, { headers: { range: "bytes=-5" } }],
+    [notes, { headers: { range: "bytes=15-" } }],
+    [notes, { headers: { range: "bytes=0-1,5-6" } }],
+    [notes, { headers: { range: "bytes=0-4,3-8" } }],
+    [notes, { headers: { range: "bytes=500-" } }],
+    [notes, { headers: { range: "bytes=abc" } }],
+    [notes, { headers: { range: "items=0-1" } }],
+    [notes, { headers: { range: "bytes=0-4", "if-range": etag } }],
+    [notes, { headers: { range: "bytes=0-4", "if-range": '"stale"' } }],
+    [notes, { headers: { range: "bytes=0-4", "if-range": lastModified } }],
+  ];
+}
+
+const staticConfigurations: [string, Record<string, unknown>][] = [
+  ["defaults", {}],
+  [
+    "caching options",
+    { maxAge: "1d", immutable: true, extensions: ["html"], dotfiles: "allow", index: "page.html" },
+  ],
+  [
+    "features off",
+    {
+      etag: false,
+      lastModified: false,
+      cacheControl: false,
+      acceptRanges: false,
+      index: false,
+      redirect: false,
+      dotfiles: "deny",
+    },
+  ],
+  ["numeric maxAge and setHeaders", { maxAge: 90_500, setHeaders: true }],
+];
+
 /** Express (`cookie`) and Nest (`serializeCookie`) order attributes differently. */
 function normalizeSetCookie(header: string): string {
   const [pair, ...attributes] = header.split(";").map((part) => part.trim());
@@ -247,7 +372,8 @@ function withoutAccept(vary: string | null): string | null {
   return fields.filter((field) => field && field !== "Accept").join(", ") || null;
 }
 
-async function snapshot(url: string, init?: RequestInit) {
+/** `files` adds the static-file headers; dynamic responses differ by Express's ETag setting. */
+async function snapshot(url: string, init?: RequestInit, files = false) {
   const response = await fetch(url, init);
   return {
     status: response.status,
@@ -271,6 +397,24 @@ async function snapshot(url: string, init?: RequestInit) {
       "access-control-max-age",
     ].map((name) => response.headers.get(name)),
     cookies: response.headers.getSetCookie().map(normalizeSetCookie),
+    ...(files
+      ? {
+          // send's file ETags are W/"<size hex>-<mtime hex>"; Express also hashes dynamic bodies.
+          fileEtag: /^W\/"[0-9a-f]+-[0-9a-f]+"$/.test(response.headers.get("etag") ?? "")
+            ? response.headers.get("etag")
+            : null,
+          fileHeaders: [
+            "last-modified",
+            "cache-control",
+            "accept-ranges",
+            "content-range",
+            "content-length",
+            "x-content-type-options",
+            "content-security-policy",
+            "x-file",
+          ].map((name) => response.headers.get(name)),
+        }
+      : {}),
     body: await response.text(),
   };
 }
@@ -297,11 +441,12 @@ async function compareCases(
   cases: Case[],
   base: string,
   referenceBase: string,
+  files = false,
 ): Promise<void> {
   for (const [path, init] of cases) {
     const [actual, expected] = await Promise.all([
-      snapshot(`${base}${path}`, init),
-      snapshot(`${referenceBase}${path}`, init),
+      snapshot(`${base}${path}`, init, files),
+      snapshot(`${referenceBase}${path}`, init, files),
     ]);
     const headers = JSON.stringify(init?.headers ?? {});
     assert.deepEqual(actual, expected, `${label}: ${init?.method ?? "GET"} ${path} ${headers}`);
@@ -372,6 +517,36 @@ export async function compareAdapters(
     },
   );
 
+  const files = await createStaticRoot();
+  try {
+    for (const [name, raw] of staticConfigurations) {
+      const options: Record<string, unknown> = { prefix: "/assets", ...raw };
+      if (raw.setHeaders) {
+        options.setHeaders = (
+          res: { setHeader(name: string, value: string): void },
+          path: string,
+        ) => res.setHeader("x-file", basename(path));
+      }
+      await withPair(
+        createAdapter,
+        createReference,
+        {
+          setup: (app) =>
+            (
+              app as unknown as { useStaticAssets(root: string, options: object): void }
+            ).useStaticAssets(files.root, options),
+        },
+        async (base, referenceBase) => {
+          const cases = staticCases(files.etag, files.lastModified);
+          await compareCases(`${type} static ${name}`, cases, base, referenceBase, true);
+          comparisons += cases.length;
+        },
+      );
+    }
+  } finally {
+    await rm(files.root, { recursive: true, force: true });
+  }
+
   for (const [name, value] of trustConfigurations) {
     await withPair(
       createAdapter,
@@ -398,6 +573,6 @@ export async function compareAdapters(
     );
   }
   console.log(
-    `${type}: ${comparisons} Express comparisons (${corsConfigurations.length} CORS and ${trustConfigurations.length} trust proxy configurations, cookie-parser) and parser error cases passed.`,
+    `${type}: ${comparisons} Express comparisons (${corsConfigurations.length} CORS, ${trustConfigurations.length} trust proxy and ${staticConfigurations.length} static configurations, cookie-parser) and parser error cases passed.`,
   );
 }

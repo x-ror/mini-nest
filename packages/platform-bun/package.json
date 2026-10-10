@@ -1,10 +1,31 @@
 {
   "name": "nestjs-adapter-bun",
   "version": "0.1.0",
+  "description": "Native Bun.serve HTTP adapter for NestJS: real Nest on Bun without Express or Fastify.",
+  "keywords": [
+    "adapter",
+    "bun",
+    "bun.serve",
+    "http",
+    "http-adapter",
+    "nest",
+    "nestjs"
+  ],
+  "homepage": "https://github.com/x-ror/nest-native-adapters#readme",
+  "bugs": {
+    "url": "https://github.com/x-ror/nest-native-adapters/issues"
+  },
+  "license": "0BSD",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/x-ror/nest-native-adapters.git",
+    "directory": "packages/platform-bun"
+  },
   "files": [
     "dist"
   ],
   "type": "module",
+  "sideEffects": false,
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -12,11 +33,18 @@
       "default": "./dist/index.js"
     }
   },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
   "dependencies": {
     "path-to-regexp": "catalog:"
   },
   "peerDependencies": {
     "@nestjs/common": "catalog:nest-peers",
     "@nestjs/core": "catalog:nest-peers"
+  },
+  "engines": {
+    "bun": ">=1.4"
   }
 }
