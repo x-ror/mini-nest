@@ -7,12 +7,15 @@ import { io as connect } from "socket.io-client";
 import assert from "node:assert/strict";
 import { NestFactory } from "@nestjs/core";
 import { compareAdapters, startFixture } from "./compare.js";
+import { checkLifecycle } from "./lifecycle.js";
 import { FixtureModule } from "./fixture.js";
 
 await compareAdapters(
   () => new BunHttpAdapter(),
   () => new ExpressAdapter(),
 );
+
+await checkLifecycle("native-bun", (options) => new BunHttpAdapter(options));
 
 const adapter = new BunHttpAdapter();
 const app = await NestFactory.create(FixtureModule, adapter, {

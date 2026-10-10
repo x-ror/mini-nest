@@ -1,16 +1,18 @@
 import "reflect-metadata";
 import { execFileSync } from "node:child_process";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { request as httpRequest } from "node:http";
 import { get as httpsGet } from "node:https";
 import { join } from "node:path";
 import { inspect } from "node:util";
 import cookieParser from "cookie-parser";
-import { afterEach, describe, expect, it } from "vite-plus/test";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { NestFactory } from "@nestjs/core";
 import { CookieSigner } from "@nestjs/core/helpers/cookies/cookie-signer.js";
 import {
   Body,
   Controller,
+  Logger,
   Get,
   Module,
   Post,
@@ -264,6 +266,142 @@ describe("native Nest adapters", () => {
     await expect(second.listen(Number(port), "127.0.0.1")).rejects.toMatchObject({
       code: "EADDRINUSE",
     });
+    // Other listen errors reject too: a socket path in a missing directory, a bad host.
+    for (const [target, code] of [
+      [() => second.listen(join(process.cwd(), "missing-dir", "app.sock")), /^(ENOENT|EACCES)$/],
+      [() => second.listen(0, "256.0.0.1"), /^(ENOTFOUND|EAI_AGAIN|EADDRNOTAVAIL)$/],
+    ] as const) {
+      await expect(target()).rejects.toMatchObject({ code: expect.stringMatching(code) });
+    }
+  });
+  it("survives clients that abort an upload and keeps serving", async () => {
+    const failures: unknown[] = [];
+    const record = (error: unknown) => failures.push(error);
+    process.on("unhandledRejection", record).on("uncaughtException", record);
+    try {
+      const app = await startFixture(new NodeHttpAdapter());
+      apps.push(app);
+      const { hostname, port } = new URL(await app.getUrl());
+      for (let attempt = 0; attempt < 5; attempt++) {
+        await new Promise<void>((resolve) => {
+          const upload = httpRequest({
+            hostname,
+            port,
+            method: "POST",
+            path: "/api/echo",
+            headers: { "content-type": "application/json", "content-length": "1000" },
+          });
+          upload.on("error", () => resolve());
+          upload.on("close", () => resolve());
+          upload.write('{"partial":');
+          setTimeout(() => upload.destroy(), 20);
+        });
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      const after = await fetch(`${await app.getUrl()}/api`);
+      expect(after.status).toBe(200);
+      await after.arrayBuffer();
+    } finally {
+      process.off("unhandledRejection", record).off("uncaughtException", record);
+    }
+    expect(failures).toEqual([]);
+  });
+  it("trusts proxies like Express's trust proxy setting", async () => {
+    // Validated up front instead of failing per request.
+    // Validated up front, with proxy-addr's rules: /0 would trust every address.
+    for (const invalid of [
+      "not-an-ip",
+      "10.0.0.0/33",
+      "10.0.0.0/0",
+      "10.0.0.0/0.0.0.0",
+      "10.0.0.0/255.0.255.0",
+      "::/0",
+      "::1/129",
+      -1,
+      1.5,
+      {},
+    ]) {
+      expect(() => new NodeHttpAdapter({ trustProxy: invalid as never })).toThrow(TypeError);
+    }
+    // Like Express, other falsy values trust nothing.
+    for (const off of [null, "", false, 0]) {
+      expect(() => new NodeHttpAdapter({ trustProxy: off as never })).not.toThrow();
+    }
+    // Unknown settings are accepted like Express, with a warning instead of an exit.
+    const warnings: unknown[] = [];
+    const warn = vi.spyOn(Logger.prototype, "warn").mockImplementation((message) => {
+      warnings.push(message);
+    });
+    const adapter = new NodeHttpAdapter();
+    expect(adapter.set("json spaces", 2)).toBe(adapter);
+    expect(adapter.disable("x-powered-by")).toBe(adapter);
+    expect(warnings).toEqual([
+      'app.set("json spaces") has no effect on the native adapters and is ignored.',
+    ]);
+    warn.mockRestore();
+
+    // The fetch path (Bun) takes the socket address from the server.
+    const fetchAdapter = new NodeHttpAdapter({ trustProxy: "loopback" });
+    const fetchApp = await NestFactory.create(FixtureModule, fetchAdapter, { logger: false });
+    apps.push(fetchApp);
+    await fetchApp.init();
+    const headers = {
+      "x-forwarded-for": "198.51.100.1, 203.0.113.7",
+      "x-forwarded-proto": "https",
+      "x-forwarded-host": "app.example:8443",
+    };
+    const viaProxy = await fetchAdapter.fetch(
+      new Request("http://localhost/api/client", { headers }),
+      { ip: "127.0.0.1" },
+    );
+    expect(await viaProxy.json()).toEqual({
+      ip: "203.0.113.7",
+      decoratorIp: "203.0.113.7",
+      ips: ["203.0.113.7"],
+      protocol: "https",
+      hostname: "app.example",
+    });
+    const direct = await fetchAdapter.fetch(
+      new Request("http://localhost/api/client", { headers }),
+      { ip: "198.51.100.9" },
+    );
+    expect(await direct.json()).toEqual({
+      ip: "198.51.100.9",
+      decoratorIp: "198.51.100.9",
+      ips: [],
+      protocol: "http",
+      hostname: "localhost",
+    });
+
+    // A trust function that throws fails the request through Nest (500), not fetch() itself.
+    const throwing = new NodeHttpAdapter({
+      trustProxy: () => {
+        throw new Error("trust failed");
+      },
+    });
+    const throwingApp = await NestFactory.create(FixtureModule, throwing, { logger: false });
+    apps.push(throwingApp);
+    await throwingApp.init();
+    const failed = await throwing.fetch(new Request("http://localhost/api/client"));
+    expect(failed.status).toBe(500);
+    expect((await throwing.fetch(new Request("http://localhost/api"))).status).toBe(200);
+
+    // Dual-stack listeners report IPv4 peers as ::ffff:127.0.0.1, which still matches "loopback".
+    const mapped = await fetchAdapter.fetch(
+      new Request("http://localhost/api/client", { headers }),
+      { ip: "::ffff:127.0.0.1" },
+    );
+    expect(await mapped.json()).toMatchObject({ ip: "203.0.113.7", protocol: "https" });
+
+    // app.set("trust proxy", ...) after creation applies to the Node path too.
+    const configured = await NestFactory.create(FixtureModule, new NodeHttpAdapter(), {
+      logger: false,
+    });
+    apps.push(configured);
+    (configured as unknown as NodeHttpAdapter).set("trust proxy", 1);
+    await configured.listen(0, "127.0.0.1");
+    const hop = await fetch(`${await configured.getUrl()}/api/client`, { headers });
+    expect(await hop.json()).toMatchObject({ ip: "203.0.113.7", ips: ["203.0.113.7"] });
   });
   it("supports CORS preflight and static file serving and rejects other unsupported capabilities explicitly", async () => {
     const adapter = new NodeHttpAdapter();

@@ -194,6 +194,40 @@ const corsConfigurations: [string, CorsOptions | typeof corsDelegate | undefined
   ],
 ];
 
+const trustCases: Case[] = [
+  ["/api/client"],
+  ["/api/client", { headers: { "x-forwarded-for": "203.0.113.7" } }],
+  ["/api/client", { headers: { "x-forwarded-for": "203.0.113.7, 10.0.0.2" } }],
+  [
+    "/api/client",
+    { headers: { "x-forwarded-for": "198.51.100.1, 203.0.113.7, 10.0.0.2, 127.0.0.1" } },
+  ],
+  ["/api/client", { headers: { "x-forwarded-for": " , 203.0.113.7 ,, " } }],
+  ["/api/client", { headers: { "x-forwarded-for": "2001:db8::1, fc00::5" } }],
+  ["/api/client", { headers: { "x-forwarded-for": "203.0.113.7, ::ffff:10.0.0.9" } }],
+  ["/api/client", { headers: { "x-forwarded-proto": "https" } }],
+  ["/api/client", { headers: { "x-forwarded-proto": "https, http" } }],
+  ["/api/client", { headers: { "x-forwarded-proto": " , https" } }],
+  ["/api/client", { headers: { "x-forwarded-host": " , b.example" } }],
+  ["/api/client", { headers: { "x-forwarded-host": "app.example:8443" } }],
+  ["/api/client", { headers: { "x-forwarded-host": "a.example, b.example" } }],
+  ["/api/client", { headers: { "x-forwarded-host": "[2001:db8::1]:8443" } }],
+];
+
+const trustConfigurations: [string, unknown][] = [
+  ["off", false],
+  ["all", true],
+  ["one hop", 1],
+  ["two hops", 2],
+  ["zero hops", 0],
+  ["loopback", "loopback"],
+  ["loopback and private", "loopback, uniquelocal"],
+  ["list", ["127.0.0.1", "10.0.0.0/8"]],
+  ["netmask", "127.0.0.0/255.0.0.0, 10.0.0.0/255.0.0.0"],
+  ["socket not trusted", "uniquelocal"],
+  ["function", (address: string | undefined, hop: number) => hop < 3 && address !== "203.0.113.7"],
+];
+
 /** Express (`cookie`) and Nest (`serializeCookie`) order attributes differently. */
 function normalizeSetCookie(header: string): string {
   const [pair, ...attributes] = header.split(";").map((part) => part.trim());
@@ -338,6 +372,20 @@ export async function compareAdapters(
     },
   );
 
+  for (const [name, value] of trustConfigurations) {
+    await withPair(
+      createAdapter,
+      createReference,
+      {
+        setup: (app) =>
+          (app as unknown as { set(name: string, value: unknown): void }).set("trust proxy", value),
+      },
+      async (base, referenceBase) => {
+        await compareCases(`${type} trust proxy ${name}`, trustCases, base, referenceBase);
+        comparisons += trustCases.length;
+      },
+    );
+  }
   for (const [name, options] of corsConfigurations) {
     await withPair(
       createAdapter,
@@ -350,6 +398,6 @@ export async function compareAdapters(
     );
   }
   console.log(
-    `${type}: ${comparisons} Express comparisons (${corsConfigurations.length} CORS configurations, cookie-parser) and parser error cases passed.`,
+    `${type}: ${comparisons} Express comparisons (${corsConfigurations.length} CORS and ${trustConfigurations.length} trust proxy configurations, cookie-parser) and parser error cases passed.`,
   );
 }

@@ -6,6 +6,7 @@ import { AbstractHttpAdapter } from "@nestjs/core";
 import { LegacyRouteConverter } from "@nestjs/core/internal";
 import {
   HttpException,
+  Logger,
   RequestMethod,
   VERSION_NEUTRAL,
   VersioningType,
@@ -29,6 +30,7 @@ import {
   type NativeRequest,
 } from "./request.js";
 import { NativeResponse } from "./response.js";
+import { compileTrust, type TrustFunction, type TrustProxy } from "./proxy.js";
 
 export { NativeResponse } from "./response.js";
 export {
@@ -39,6 +41,13 @@ export {
   type UploadedFileData,
 } from "./uploads.js";
 export { NullObject, parseQuery } from "./request.js";
+export {
+  hostnameOf,
+  resolveProxy,
+  type ProxyView,
+  type TrustFunction,
+  type TrustProxy,
+} from "./proxy.js";
 export type { NativeRequest } from "./request.js";
 export type { CookieWriter, ResponseBody, ResponseCookieOptions } from "./response.js";
 export interface NativeAdapterOptions {
@@ -46,6 +55,12 @@ export interface NativeAdapterOptions {
   /** Limit for multipart bodies (file uploads); defaults to `bodyLimit`. */
   uploadLimit?: number;
   shutdownTimeout?: number;
+  /**
+   * Express's `trust proxy` setting, which decides when `X-Forwarded-For`,
+   * `X-Forwarded-Proto` and `X-Forwarded-Host` replace the socket address,
+   * protocol and host. Off by default; `app.set("trust proxy", value)` works too.
+   */
+  trustProxy?: TrustProxy;
 }
 /** Express's view engine signature: `(path, options, callback)`. */
 export type ViewRenderer = (
@@ -79,6 +94,8 @@ export abstract class NativeHttpAdapter<TServer> extends AbstractHttpAdapter<
   private viewEngine?: { extension: string; render?: ViewRenderer };
   private shuttingDown = false;
   private return503OnClosing = false;
+  /** Compiled `trust proxy` setting; undefined trusts no proxy. */
+  protected trust: TrustFunction | undefined;
 
   constructor(protected readonly adapterOptions: NativeAdapterOptions = {}) {
     super();
@@ -125,9 +142,36 @@ export abstract class NativeHttpAdapter<TServer> extends AbstractHttpAdapter<
         this.router.route(method.toUpperCase(), path, callback);
       };
     }
+    this.trust = compileTrust(options.trustProxy);
     this.setInstance(instance);
   }
 
+  /**
+   * Express's `app.set()`, so `app.set("trust proxy", 1)` keeps working after a
+   * migration. Like Express, any setting name is accepted. Only `trust proxy`
+   * has an effect; `x-powered-by` is silently accepted (these adapters never
+   * send that header), and any other setting logs a warning that it is
+   * ignored. A call through Nest's app runs in its exception zone, so an
+   * invalid `trust proxy` value fails startup, as it does on Express.
+   */
+  set(setting: string, value: unknown): this {
+    if (setting === "trust proxy") {
+      this.trust = compileTrust(value as TrustProxy);
+    } else if (setting !== "x-powered-by") {
+      new Logger(NativeHttpAdapter.name).warn(
+        `app.set("${setting}") has no effect on the native adapters and is ignored.`,
+      );
+    }
+    return this;
+  }
+  /** Express's `app.enable(setting)`; see `set()`. */
+  enable(setting: string): this {
+    return this.set(setting, true);
+  }
+  /** Express's `app.disable(setting)`; see `set()`. */
+  disable(setting: string): this {
+    return this.set(setting, false);
+  }
   use(...args: (string | Handler | Handler[])[]): this {
     const path = typeof args[0] === "string" ? (args.shift() as string) : "/";
     for (const handler of args.flat()) {
@@ -137,7 +181,7 @@ export abstract class NativeHttpAdapter<TServer> extends AbstractHttpAdapter<
     return this;
   }
   readonly fetch = (raw: Request, info?: { ip?: string }): Promise<Response> => {
-    const request = createRequest(raw, info?.ip);
+    const request = createRequest(raw, info?.ip, this.trust);
     const response = new NativeResponse(request.method, this, request);
     this.dispatch(request, response);
     return response.done;
