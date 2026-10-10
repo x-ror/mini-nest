@@ -20,6 +20,7 @@ export type {
   NativeAdapterOptions,
   NativeRequest,
   ResponseCookieOptions,
+  StaticAssetsOptions,
   TrustProxy,
   UploadedFileData,
   ViewRenderer,

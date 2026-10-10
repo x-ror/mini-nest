@@ -30,6 +30,7 @@ export type {
   NativeAdapterOptions,
   NativeRequest,
   ResponseCookieOptions,
+  StaticAssetsOptions,
   TrustProxy,
   UploadedFileData,
   ViewRenderer,
@@ -174,6 +175,7 @@ class NodeResponse extends NativeResponse {
       return;
     }
     outgoing.writeHead(this.statusCode, this.headerValues);
+    if (body instanceof Blob) body = Readable.fromWeb(body.stream() as never);
     if (body instanceof Readable) {
       pipeline(body, outgoing, (error) => {
         if (error && error.code !== "ERR_STREAM_PREMATURE_CLOSE")
