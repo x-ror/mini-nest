@@ -9,6 +9,7 @@ import {
   HttpCode,
   Inject,
   Injectable,
+  Ip,
   Module,
   Options,
   Param,
@@ -184,6 +185,16 @@ class TestController {
       cookies: req.cookies ?? null,
       signedCookies: req.signedCookies ?? null,
       secret: typeof req.secret,
+    };
+  }
+  /** What the request reports about the client, for the trust proxy comparison. */
+  @Get("client") client(@Req() req: NativeRequest, @Ip() ip: string) {
+    return {
+      ip: req.ip,
+      decoratorIp: ip,
+      ips: req.ips,
+      protocol: req.protocol,
+      hostname: req.hostname,
     };
   }
   @Get("cookies/read") readCookies(

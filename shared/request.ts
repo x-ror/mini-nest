@@ -1,4 +1,11 @@
 import { BadRequestException, PayloadTooLargeException } from "@nestjs/common";
+import {
+  forwardedChain,
+  forwardedHost,
+  forwardedProtocol,
+  hostnameOf,
+  type TrustFunction,
+} from "./proxy.js";
 
 export interface NativeRequest {
   raw: Request;
@@ -6,9 +13,14 @@ export interface NativeRequest {
   url: string;
   originalUrl: string;
   path: string;
+  /** The `Host` header without its port, or `X-Forwarded-Host` from a trusted proxy. */
   hostname: string;
+  /** `http`/`https`, or `X-Forwarded-Proto` from a trusted proxy. */
   protocol: string;
+  /** The client address: the socket peer, or the nearest untrusted `X-Forwarded-For` entry. */
   ip?: string;
+  /** Trusted `X-Forwarded-For` chain, farthest first, as Express's `req.ips`; empty without `trustProxy`. */
+  ips: string[];
   headers: Record<string, string>;
   params: Record<string, string | string[]>;
   query: Record<string, string | string[]>;
@@ -155,16 +167,18 @@ function headersObject(headers: Headers): Record<string, string> {
   return native.toJSON ? native.toJSON() : Object.fromEntries(headers);
 }
 
-export function createRequest(raw: Request, ip?: string): NativeRequest {
+export function createRequest(raw: Request, ip?: string, trust?: TrustFunction): NativeRequest {
   // `Request.url` is already an absolute, normalized URL; slicing avoids a reparse.
   const full = raw.url;
   const hostStart = full.indexOf("://") + 3;
   const pathStart = full.indexOf("/", hostStart);
   const url = pathStart === -1 ? "/" : full.slice(pathStart);
   const queryStart = url.indexOf("?");
-  return {
+  const headers = headersObject(raw.headers);
+  const request: NativeRequest = {
     raw,
     ip,
+    ips: [],
     method: raw.method,
     url,
     originalUrl: url,
@@ -173,10 +187,32 @@ export function createRequest(raw: Request, ip?: string): NativeRequest {
       .slice(hostStart, pathStart === -1 ? undefined : pathStart)
       .replace(/^.*@|:\d*$/g, ""),
     protocol: full.slice(0, hostStart - 3),
-    headers: headersObject(raw.headers),
+    headers,
     params: new NullObject(),
     query: queryStart === -1 ? new NullObject() : parseQuery(url.slice(queryStart + 1)),
   };
+  if (trust) applyTrustedProxy(request, headers, ip, trust);
+  return request;
+}
+
+/** Applies Express's `trust proxy` rules to a request built from a fetch `Request`. */
+function applyTrustedProxy(
+  request: NativeRequest,
+  headers: Record<string, string>,
+  socketAddress: string | undefined,
+  trust: TrustFunction,
+): void {
+  const chain = forwardedChain(socketAddress, headers["x-forwarded-for"], trust);
+  request.ip = chain[chain.length - 1];
+  request.ips = (chain.slice(1) as string[]).reverse();
+  request.protocol = forwardedProtocol(
+    request.protocol,
+    socketAddress,
+    headers["x-forwarded-proto"],
+    trust,
+  );
+  const host = forwardedHost(undefined, socketAddress, headers["x-forwarded-host"], trust);
+  if (host !== undefined) request.hostname = hostnameOf(host) ?? request.hostname;
 }
 
 export type BodyReader = (request: NativeRequest, limit: number) => Promise<Buffer> | Buffer | null;

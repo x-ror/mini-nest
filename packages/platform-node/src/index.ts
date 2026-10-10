@@ -7,10 +7,15 @@ import {
   NativeHttpAdapter,
   NativeResponse,
   NullObject,
+  forwardedChain,
+  forwardedHost,
+  forwardedProtocol,
+  hostnameOf,
   parseQuery,
   type CookieWriter,
   type NativeRequest,
   type ResponseBody,
+  type TrustFunction,
 } from "@shared";
 
 export {
@@ -26,6 +31,7 @@ export type {
   NativeAdapterOptions,
   NativeRequest,
   ResponseCookieOptions,
+  TrustProxy,
   UploadedFileData,
   ViewRenderer,
 } from "@shared";
@@ -44,10 +50,12 @@ class NodeRequest implements NativeRequest {
   private search: string;
   private parsedQuery?: Record<string, string | string[]>;
   private webRequest?: Request;
+  private chain?: (string | undefined)[];
 
   constructor(
     readonly incoming: IncomingMessage,
     private readonly outgoing: ServerResponse,
+    private readonly trust: TrustFunction | undefined,
   ) {
     this.method = incoming.method ?? "GET";
     let url = incoming.url ?? "/";
@@ -67,13 +75,40 @@ class NodeRequest implements NativeRequest {
     return this.incoming.headers as Record<string, string>;
   }
   get hostname(): string {
-    return (this.incoming.headers.host ?? "localhost").replace(/:\d*$/, "");
+    const { headers, socket } = this.incoming;
+    if (!this.trust) return (headers.host ?? "localhost").replace(/:\d*$/, "");
+    const forwarded = forwardedHost(
+      undefined,
+      socket.remoteAddress,
+      headers["x-forwarded-host"] as string | undefined,
+      this.trust,
+    );
+    return hostnameOf(forwarded ?? headers.host) ?? "localhost";
   }
   get protocol(): string {
-    return (this.incoming.socket as TLSSocket).encrypted ? "https" : "http";
+    const { headers, socket } = this.incoming;
+    const protocol = (socket as TLSSocket).encrypted ? "https" : "http";
+    return forwardedProtocol(
+      protocol,
+      socket.remoteAddress,
+      headers["x-forwarded-proto"] as string | undefined,
+      this.trust,
+    );
   }
   get ip(): string | undefined {
-    return this.incoming.socket.remoteAddress;
+    if (!this.trust) return this.incoming.socket.remoteAddress;
+    const chain = this.forwardedChain();
+    return chain[chain.length - 1];
+  }
+  get ips(): string[] {
+    return this.trust ? (this.forwardedChain().slice(1) as string[]).reverse() : [];
+  }
+  private forwardedChain(): (string | undefined)[] {
+    return (this.chain ??= forwardedChain(
+      this.incoming.socket.remoteAddress,
+      this.incoming.headers["x-forwarded-for"] as string | undefined,
+      this.trust!,
+    ));
   }
   get query(): Record<string, string | string[]> {
     return (this.parsedQuery ??= parseQuery(this.search));
@@ -167,7 +202,7 @@ export class NodeHttpAdapter extends NativeHttpAdapter<Server> {
     this.validateApplicationOptions(options);
     this.forceCloseConnections = options.forceCloseConnections ?? false;
     const listener = (incoming: IncomingMessage, outgoing: ServerResponse): void => {
-      const request = new NodeRequest(incoming, outgoing);
+      const request = new NodeRequest(incoming, outgoing, this.trust);
       this.dispatch(request, new NodeResponse(request.method, outgoing, this, request));
     };
     this.httpServer = options.httpsOptions

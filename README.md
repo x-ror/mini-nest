@@ -20,26 +20,27 @@ Fastify a benchmark-only one.
 
 ## Compatibility matrix
 
-| Capability                                           | Node adapter  | Bun adapter   | Notes                                                       |
-| ---------------------------------------------------- | ------------- | ------------- | ----------------------------------------------------------- |
-| Nest baseline                                        | Verified      | Verified      | NestJS 12.1.2; other versions are unverified                |
-| Runtime                                              | Node.js 22+   | Current Bun   | Bun uses `Bun.serve`                                        |
-| Routing, middleware, guards, pipes, interceptors, DI | Supported     | Supported     | Shared adapter implementation                               |
-| JSON and nested URL-encoded bodies                   | Supported     | Supported     | Parsed body limit defaults to 100 KiB                       |
-| Multipart forms                                      | Supported     | Supported     | Files are native `File` values on `@Body()`                 |
-| CORS                                                 | Supported     | Supported     | Same options and headers as `cors` (Express)                |
-| Cookies                                              | Supported     | Supported     | Nest's cookie API, `res.cookie()`, `cookie-parser`          |
-| Static assets                                        | Basic support | Basic support | Not a replacement for dedicated integrations/CDNs           |
-| Text, raw and custom-type bodies                     | Supported     | Supported     | Opt in with `app.useBodyParser(...)`                        |
-| Header, media-type and custom versioning             | Supported     | Supported     | Same per-handler matching as Nest's Express adapter         |
-| Nest `@Sse()`                                        | Supported     | Supported     | Observable `MessageEvent` stream                            |
-| Streamed responses with `res.write()`                | Supported     | Supported     | Chunked; headers are sent on the first write                |
-| Response events (`res.on("finish")`)                 | Supported     | Not supported | Forwarded to Node's `ServerResponse`                        |
-| TLS / HTTPS                                          | Supported     | Untested      | Nest `httpsOptions`; Bun reads key, cert, ca and passphrase |
-| WebSocket gateways                                   | Supported     | Supported     | Node: Nest's `WsAdapter`; Bun: `BunWsAdapter`               |
-| Socket.IO gateways                                   | Supported     | Not supported | Automatic on Node; under Bun use the Node adapter           |
-| File upload interceptors                             | Supported     | Supported     | `FileInterceptor` and friends; memory storage only          |
-| MVC (`@Render()`)                                    | Supported     | Supported     | Express-compatible engines (`ejs`, `pug`, `hbs`)            |
+| Capability                                           | Node adapter  | Bun adapter   | Notes                                                        |
+| ---------------------------------------------------- | ------------- | ------------- | ------------------------------------------------------------ |
+| Nest baseline                                        | Verified      | Verified      | NestJS 12.1.2; other versions are unverified                 |
+| Runtime                                              | Node.js 22+   | Current Bun   | Bun uses `Bun.serve`                                         |
+| Routing, middleware, guards, pipes, interceptors, DI | Supported     | Supported     | Shared adapter implementation                                |
+| JSON and nested URL-encoded bodies                   | Supported     | Supported     | Parsed body limit defaults to 100 KiB                        |
+| Multipart forms                                      | Supported     | Supported     | Files are native `File` values on `@Body()`                  |
+| CORS                                                 | Supported     | Supported     | Same options and headers as `cors` (Express)                 |
+| Trusted proxies (`X-Forwarded-*`)                    | Supported     | Supported     | Express's `trust proxy`: `ip`, `ips`, `protocol`, `hostname` |
+| Cookies                                              | Supported     | Supported     | Nest's cookie API, `res.cookie()`, `cookie-parser`           |
+| Static assets                                        | Basic support | Basic support | Not a replacement for dedicated integrations/CDNs            |
+| Text, raw and custom-type bodies                     | Supported     | Supported     | Opt in with `app.useBodyParser(...)`                         |
+| Header, media-type and custom versioning             | Supported     | Supported     | Same per-handler matching as Nest's Express adapter          |
+| Nest `@Sse()`                                        | Supported     | Supported     | Observable `MessageEvent` stream                             |
+| Streamed responses with `res.write()`                | Supported     | Supported     | Chunked; headers are sent on the first write                 |
+| Response events (`res.on("finish")`)                 | Supported     | Not supported | Forwarded to Node's `ServerResponse`                         |
+| TLS / HTTPS                                          | Supported     | Untested      | Nest `httpsOptions`; Bun reads key, cert, ca and passphrase  |
+| WebSocket gateways                                   | Supported     | Supported     | Node: Nest's `WsAdapter`; Bun: `BunWsAdapter`                |
+| Socket.IO gateways                                   | Supported     | Not supported | Automatic on Node; under Bun use the Node adapter            |
+| File upload interceptors                             | Supported     | Supported     | `FileInterceptor` and friends; memory storage only           |
+| MVC (`@Render()`)                                    | Supported     | Supported     | Express-compatible engines (`ejs`, `pug`, `hbs`)             |
 
 ## Usage
 
@@ -221,8 +222,8 @@ transport-specific code before replacing the platform adapter:
   framework-specific options; the implementation intentionally provides a
   smaller feature set than the corresponding Express/Fastify integrations.
 - Pass Nest `httpsOptions` for native HTTPS, or terminate TLS at a reverse
-  proxy. Do not trust forwarded headers unless the application implements a
-  trusted-proxy policy.
+  proxy. Keep `app.set("trust proxy", ...)` as is, or pass the same value as
+  the `trustProxy` adapter option.
 
 If the application depends on Multer disk storage, Fastify plugins,
 Express middleware, retain the existing
@@ -283,11 +284,40 @@ server {
 ```
 
 If using the `1m` proxy limit, configure the adapter with
-`{ bodyLimit: 1024 * 1024 }`. The adapters currently do not interpret
-`X-Forwarded-*` headers: `@Req().protocol` and `@Req().ip` reflect the
-application-side HTTP connection, not the original client connection. Do not
-use forwarded headers for security decisions unless a trusted-proxy policy is
-implemented by your application.
+`{ bodyLimit: 1024 * 1024 }`.
+
+### Trusted proxies
+
+By default the adapters ignore `X-Forwarded-*` headers: `req.ip`, `@Ip()`,
+`req.protocol` and `req.hostname` describe the connection to the
+application, as on Express. Behind a reverse proxy, tell the adapter which
+hops to trust, with the same values as Express's `trust proxy` setting:
+
+```ts
+new NodeHttpAdapter({ trustProxy: "loopback" }); // or BunHttpAdapter
+// or, as on Express, after creating the app:
+app.set("trust proxy", 1);
+```
+
+| Value                       | Trusts                                                                    |
+| --------------------------- | ------------------------------------------------------------------------- |
+| `false` (default), `0`      | nothing                                                                   |
+| `true`                      | every hop; only when nothing else can reach the app                       |
+| a number `n`                | the nearest `n` hops                                                      |
+| a string or array           | addresses, CIDR or netmask ranges, `loopback`, `linklocal`, `uniquelocal` |
+| `(address, hop) => boolean` | whatever the function accepts; hop 0 is the socket peer                   |
+
+With a trusted socket peer, `req.ip` becomes the nearest untrusted
+`X-Forwarded-For` entry, `req.ips` lists the trusted chain farthest first,
+`req.protocol` follows `X-Forwarded-Proto`, and `req.hostname` follows
+`X-Forwarded-Host`. The results match Express for the cases in the
+conformance suite. Invalid values throw when the adapter is created or the
+setting is applied. `app.set()` understands only `trust proxy` (and accepts
+`x-powered-by`, which these adapters never send); other settings throw.
+
+> **Warning:** trust only the proxies in front of the application. With
+> `true` or a hop count larger than the real proxy chain, any client can set
+> its own `req.ip` through `X-Forwarded-For`.
 
 The Node adapter exposes its real HTTP server through `getHttpServer()`.
 The Bun adapter exposes a small event/address facade for Nest's listen lifecycle,
@@ -345,9 +375,12 @@ Other integrations can share the Bun server through
   and set `proxy_read_timeout` to match the expected idle interval. The adapter
   sends `X-Accel-Buffering: no`, but proxy configuration controls end-to-end
   behavior.
-- `shutdownTimeout` defaults to 5000 ms. When it expires, outstanding Node
-  connections or Bun requests may be forcibly closed; choose a timeout long
-  enough for in-flight requests and SSE shutdown.
+- `app.close()` stops accepting connections and waits for in-flight
+  requests, which still get their responses. `shutdownTimeout` (default
+  5000 ms) bounds that wait: when it expires, remaining connections are
+  closed. Nest's `forceCloseConnections: true` closes them at once. A client
+  that disconnects from an `@Sse()` stream unsubscribes its Observable. The
+  conformance suite checks all of this on Node and Bun.
 
 ### Benchmarks
 

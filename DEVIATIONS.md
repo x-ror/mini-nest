@@ -14,7 +14,10 @@ history, not active workspace packages.
   events on Bun remain outside the implementation. Nest `@Sse()` Observable
   routes, `res.write()` streaming, opt-in text/raw body parsers, all Nest
   versioning types, and native HTTPS via `httpsOptions` (untested on Bun) are
-  supported. Forwarded headers are not interpreted by the adapter. Multipart files are
+  supported. Forwarded headers are interpreted only through Express's
+  `trust proxy` semantics (`trustProxy` option or `app.set("trust proxy")`),
+  off by default; Express's `req.secure`, `req.host` and `req.subdomains` are
+  not provided. Multipart files are
   native `File` values in `@Body()`. Basic static file serving is supported
   through the adapter middleware API. CORS mirrors the `cors` package used by
   Nest's Express adapter (option merging, headers, `Vary`, preflight
@@ -45,9 +48,10 @@ history, not active workspace packages.
 
 ### Phase 1: harden the supported baseline
 
-- lock in lifecycle behavior for `close()`, shutdown timeout, and connection aborts
-- add explicit regression coverage for repeated close, 503-on-closing, and listen failures
-- keep the Node/Bun conformance matrix aligned with Nest 12.1.2 and the documented API contract
+- [x] lock in lifecycle behavior for `close()`, shutdown timeout, and connection aborts
+- [x] add explicit regression coverage for repeated close, 503-on-closing, and listen failures
+- [x] keep the Node/Bun conformance matrix aligned with Nest 12.1.2 and the documented API contract
+- [x] interpret `X-Forwarded-*` headers through Express's `trust proxy` semantics
 
 ### Phase 2: expand supported real-world integrations
 

@@ -20,6 +20,7 @@ export type {
   NativeAdapterOptions,
   NativeRequest,
   ResponseCookieOptions,
+  TrustProxy,
   UploadedFileData,
   ViewRenderer,
 } from "@shared";

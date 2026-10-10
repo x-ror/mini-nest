@@ -29,6 +29,7 @@ import {
   type NativeRequest,
 } from "./request.js";
 import { NativeResponse } from "./response.js";
+import { compileTrust, type TrustFunction, type TrustProxy } from "./proxy.js";
 
 export { NativeResponse } from "./response.js";
 export {
@@ -39,6 +40,14 @@ export {
   type UploadedFileData,
 } from "./uploads.js";
 export { NullObject, parseQuery } from "./request.js";
+export {
+  forwardedChain,
+  forwardedHost,
+  forwardedProtocol,
+  hostnameOf,
+  type TrustFunction,
+  type TrustProxy,
+} from "./proxy.js";
 export type { NativeRequest } from "./request.js";
 export type { CookieWriter, ResponseBody, ResponseCookieOptions } from "./response.js";
 export interface NativeAdapterOptions {
@@ -46,6 +55,12 @@ export interface NativeAdapterOptions {
   /** Limit for multipart bodies (file uploads); defaults to `bodyLimit`. */
   uploadLimit?: number;
   shutdownTimeout?: number;
+  /**
+   * Express's `trust proxy` setting, which decides when `X-Forwarded-For`,
+   * `X-Forwarded-Proto` and `X-Forwarded-Host` replace the socket address,
+   * protocol and host. Off by default; `app.set("trust proxy", value)` works too.
+   */
+  trustProxy?: TrustProxy;
 }
 /** Express's view engine signature: `(path, options, callback)`. */
 export type ViewRenderer = (
@@ -79,6 +94,8 @@ export abstract class NativeHttpAdapter<TServer> extends AbstractHttpAdapter<
   private viewEngine?: { extension: string; render?: ViewRenderer };
   private shuttingDown = false;
   private return503OnClosing = false;
+  /** Compiled `trust proxy` setting; undefined trusts no proxy. */
+  protected trust: TrustFunction | undefined;
 
   constructor(protected readonly adapterOptions: NativeAdapterOptions = {}) {
     super();
@@ -125,9 +142,32 @@ export abstract class NativeHttpAdapter<TServer> extends AbstractHttpAdapter<
         this.router.route(method.toUpperCase(), path, callback);
       };
     }
+    this.trust = compileTrust(options.trustProxy);
     this.setInstance(instance);
   }
 
+  /**
+   * Express's `app.set()` for the settings these adapters understand, so
+   * `app.set("trust proxy", 1)` keeps working after a migration. Express only
+   * sends `X-Powered-By`, so `x-powered-by` is accepted and has no effect.
+   * Any other setting throws instead of being silently ignored.
+   */
+  set(setting: string, value: unknown): this {
+    if (setting === "trust proxy") {
+      this.trust = compileTrust(value as TrustProxy);
+      return this;
+    }
+    if (setting === "x-powered-by" && typeof value === "boolean") return this;
+    throw new Error(`Unsupported adapter setting: ${setting}`);
+  }
+  /** Express's `app.enable(setting)`; see `set()`. */
+  enable(setting: string): this {
+    return this.set(setting, true);
+  }
+  /** Express's `app.disable(setting)`; see `set()`. */
+  disable(setting: string): this {
+    return this.set(setting, false);
+  }
   use(...args: (string | Handler | Handler[])[]): this {
     const path = typeof args[0] === "string" ? (args.shift() as string) : "/";
     for (const handler of args.flat()) {
@@ -137,7 +177,7 @@ export abstract class NativeHttpAdapter<TServer> extends AbstractHttpAdapter<
     return this;
   }
   readonly fetch = (raw: Request, info?: { ip?: string }): Promise<Response> => {
-    const request = createRequest(raw, info?.ip);
+    const request = createRequest(raw, info?.ip, this.trust);
     const response = new NativeResponse(request.method, this, request);
     this.dispatch(request, response);
     return response.done;
