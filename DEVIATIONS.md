@@ -17,19 +17,23 @@ history, not active workspace packages.
   supported. Forwarded headers are not interpreted by the adapter. Multipart files are
   native `File` values in `@Body()`. Basic static file serving is supported
   through the adapter middleware API. CORS mirrors the `cors` package used by
-  Nest's Express adapter (options, headers, `Vary`, preflight handling), except
-  that a `204` preflight omits `Content-Length`. Cookies rely on Nest 12's
-  built-in signing and parsing helpers: `@Cookies()`, `@SignedCookies()`,
-  `setCookie()`/`clearCookie()` and `cookies.secret` work unchanged, and the
-  request/response facades add `req.cookies`, `req.signedCookies`,
-  `res.cookie()` and `res.clearCookie()` so `cookie-parser` is not needed.
-  Express's cookie `encode` option is not provided.
+  Nest's Express adapter (option merging, headers, `Vary`, preflight
+  handling), except that a `204` preflight omits `Content-Length`; the
+  adapters also accept the `allowCredentials` alias of earlier releases.
+  Cookies use Nest 12's own API: `@Cookies()`, `@SignedCookies()`,
+  `setCookie()`/`clearCookie()` and `cookies.secret` work unchanged. As on
+  Express, `req.cookies` and `req.signedCookies` are left to `cookie-parser`,
+  which works unchanged. `res.cookie()`/`res.clearCookie()` follow Express,
+  except that they can also sign with `cookies.secret`, Nest's serializer
+  rejects `sameSite: "none"` and `partitioned` without `secure`, and the
+  `encode` option throws.
 - `path-to-regexp` is a deliberate routing dependency; maintaining a custom
   path grammar would add unnecessary compatibility risk.
 - Middleware path normalization uses Nest's internal `LegacyRouteConverter`,
-  just like its Express adapter, and cookie parsing/serialization imports
-  `@nestjs/core/helpers/cookies/*` so signatures and header formats stay
-  byte-identical to Nest's; these are version-sensitive integration points.
+  just like its Express adapter, and `res.cookie()` signs `cookie-parser`
+  secrets with Nest's `@nestjs/core/helpers/cookies/cookie-signer.js` so the
+  format stays byte-identical to Nest's; these are version-sensitive
+  integration points.
 - Redirects always return a plain-text body, rather than Express's optional
   Accept-negotiated HTML redirect page.
 - Performance claims require separate benchmarks. Deno is no longer a target.

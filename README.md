@@ -28,7 +28,7 @@ Fastify a benchmark-only one.
 | JSON and nested URL-encoded bodies                   | Supported     | Supported     | Parsed body limit defaults to 100 KiB                       |
 | Multipart forms                                      | Supported     | Supported     | Files are native `File` values on `@Body()`                 |
 | CORS                                                 | Supported     | Supported     | Same options and headers as `cors` (Express)                |
-| Cookies                                              | Supported     | Supported     | `@Cookies()`, `@SignedCookies()`, `res.cookie()`; no parser |
+| Cookies                                              | Supported     | Supported     | Nest's cookie API, `res.cookie()`, `cookie-parser`          |
 | Static assets                                        | Basic support | Basic support | Not a replacement for dedicated integrations/CDNs           |
 | Text, raw and custom-type bodies                     | Supported     | Supported     | Opt in with `app.useBodyParser(...)`                        |
 | Header, media-type and custom versioning             | Supported     | Supported     | Same per-handler matching as Nest's Express adapter         |
@@ -96,48 +96,83 @@ cross-origin access is enabled: call `app.enableCors()` as on Express.
 
 `app.enableCors(options)` and `NestFactory.create(..., { cors })` take Nest's
 `CorsOptions` or a `CorsOptionsDelegate` and behave like the `cors` package
-that Nest's Express adapter installs: `origin` may be `*`, `true` (reflect the
-request origin), a string, a `RegExp`, an array of those, or a callback;
-`methods`, `allowedHeaders` and `exposedHeaders` take strings or arrays;
-`credentials`, `maxAge`, `preflightContinue` and `optionsSuccessStatus` are
-honored. Every `OPTIONS` request is answered as a preflight unless
-`preflightContinue` is set, `Vary` is appended for reflected origins and
-headers, and an origin that is not allowed gets no
-`Access-Control-Allow-Origin` header at all. The only difference from Express is
-that a `204` preflight carries no `Content-Length` header, as HTTP requires.
+that Nest's Express adapter installs. The conformance suite compares a dozen
+configurations header by header against Express.
+
+- Options are merged over the `cors` defaults (any origin, `GET,HEAD,PUT,PATCH,POST,DELETE`,
+  status `204`). An option that is present but `undefined` overrides its
+  default, so `{ origin: process.env.CORS_ORIGIN }` with the variable unset
+  turns CORS **off** instead of allowing every origin.
+- `origin` may be `*`, `true` (reflect the request origin), a string, a
+  `RegExp`, an array of those, or a callback. The callback also runs for
+  requests without an `Origin` header and receives `undefined`; an error it
+  passes becomes a 500 response, as on Express.
+- `methods`, `allowedHeaders` (alias `headers`) and `exposedHeaders` take
+  strings or arrays. Empty values send no header. Without `allowedHeaders`, the
+  requested headers are reflected and `Access-Control-Request-Headers` is
+  added to `Vary`.
+- `credentials`, `maxAge`, `preflightContinue` and `optionsSuccessStatus` are
+  honored. Every `OPTIONS` request is answered as a preflight unless
+  `preflightContinue` is set, in which case it reaches the `@Options()` route
+  with the CORS headers already set.
+- A delegate may call back with no options to get the defaults. Static options
+  are compiled once; only delegates and origin callbacks run per request.
+
+> **Warning:** `origin: true` reflects any origin. Combined with
+> `credentials: true`, any website can make credentialed requests and read the
+> responses. Use an allowlist for credentialed APIs.
+
+The only difference from Express is that a `204` preflight carries no
+`Content-Length` header, as RFC 9110 requires.
+
+Earlier releases of these adapters behaved differently: `origin: true` sent
+`*`, the origin callback was skipped for requests without an `Origin` header,
+only `OPTIONS` requests with `Access-Control-Request-Method` were treated as
+preflights, and a fixed list of allowed headers was sent. Review CORS
+configurations when upgrading. `allowCredentials: true` from those releases is
+still accepted as an alias of `credentials: true`.
 
 ### Cookies
 
 Nest's own cookie support works unchanged on both adapters: `@Cookies()`,
 `@SignedCookies()`, `httpAdapter.setCookie()` / `clearCookie()` and the
-`cookies: { secret }` application option. No `cookie-parser` is needed:
-`NativeRequest` parses the `Cookie` header lazily into `req.cookies`, and
-`req.signedCookies` holds the cookies whose signature verifies (it throws when
-no secret is configured, like `@SignedCookies()`). Signatures use Nest's
-`s:value.signature` format, so cookies signed by Express/`cookie-parser` with
-the same secret keep verifying.
+`cookies: { secret }` application option. The decorators parse the `Cookie`
+header themselves, so they need no middleware.
+
+Like Express, the adapters do not fill `req.cookies` or `req.signedCookies`.
+To use them in middleware and guards, install `cookie-parser` as on Express:
+`app.use(cookieParser(secret))`. It works unchanged, including `j:` JSON
+cookies and signed cookies, and `@SignedCookies()` falls back to its result
+when `cookies.secret` is not configured. Signatures use the same
+`s:value.signature` format everywhere, so give both the same secret.
 
 For `@Res()` handlers migrated from Express, `NativeResponse` offers
 `res.cookie(name, value, options)` and `res.clearCookie(name, options)` with
-Express semantics: objects become `j:`-prefixed JSON, `maxAge` is in
-**milliseconds** and also sets `Expires`, and `signed: true` uses the
-application secret. Note that Nest's `httpAdapter.setCookie()` takes `maxAge`
-in seconds. Invalid names, values or attributes throw a `TypeError`, and
-`sameSite: "none"` or `partitioned` require `secure: true`. Express's `encode`
-option is not provided.
+Express semantics:
+
+- objects become `j:`-prefixed JSON and other values are stringified;
+- `maxAge` is in **milliseconds** and also sets `Expires`, while `null` leaves
+  it out (Nest's `httpAdapter.setCookie()` takes `maxAge` in seconds);
+- `null` or `false` attributes are left out, and `sameSite: true` means `Strict`;
+- `signed: true` uses the secret `cookie-parser` set, as Express does, and
+  otherwise `cookies.secret`.
+
+Cookies are serialized by Nest, so invalid names, values or attributes throw a
+`TypeError`, and `sameSite: "none"` or `partitioned` require `secure: true`.
+Express's `encode` option is not supported and throws.
 
 ```ts
 @Get("login")
 login(@Res() res: NativeResponse) {
   res
     .cookie("session", token, { httpOnly: true, secure: true, maxAge: 86_400_000 })
-    .cookie("prefs", { theme: "dark" })
+    .cookie("theme", "dark")
     .json({ ok: true });
 }
 
 @Get("me")
-me(@Cookies("prefs") prefs: string, @SignedCookies("uid") uid?: string) {
-  return { prefs, uid };
+me(@Cookies("theme") theme: string, @SignedCookies("uid") uid?: string) {
+  return { theme, uid };
 }
 ```
 
@@ -164,9 +199,9 @@ transport-specific code before replacing the platform adapter:
   defaults to `bodyLimit`. Without an interceptor, files stay on `@Body()` as
   Web `File` objects.
 - Keep `app.enableCors(...)` as is; the options and resulting headers match
-  the `cors` package. Replace `cookie-parser` with nothing: `req.cookies`,
-  `req.signedCookies`, `res.cookie()` and `res.clearCookie()` are built in,
-  and signed cookies use the `cookies: { secret }` application option.
+  the `cors` package. Keep `cookie-parser` if middleware or guards read
+  `req.cookies`; `res.cookie()` and `res.clearCookie()` behave as on Express.
+  Nest's `@Cookies()` and `@SignedCookies()` need no middleware.
 - Register static assets through the adapter API and test any
   framework-specific options; the implementation intentionally provides a
   smaller feature set than the corresponding Express/Fastify integrations.

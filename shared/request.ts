@@ -1,6 +1,4 @@
 import { BadRequestException, PayloadTooLargeException } from "@nestjs/common";
-import type { CookieSigner } from "@nestjs/core/helpers/cookies/cookie-signer.js";
-import { parseCookieHeader } from "@nestjs/core/helpers/cookies/parse-cookie-header.js";
 
 export interface NativeRequest {
   raw: Request;
@@ -16,42 +14,15 @@ export interface NativeRequest {
   query: Record<string, string | string[]>;
   body?: unknown;
   rawBody?: Buffer;
-  /** The `Cookie` header, parsed on first access (no `cookie-parser` needed). */
-  readonly cookies: Record<string, string>;
   /**
-   * Cookies whose signature verifies against the `cookies.secret` application
-   * option, unsigned. Throws when no secret is configured.
+   * Set by `cookie-parser` when the application installs it, exactly as on
+   * Express. Nest's `@Cookies()` and `@SignedCookies()` do not need it.
    */
-  readonly signedCookies: Record<string, string>;
-}
-
-/** Shared lazy `cookies` / `signedCookies` getters for the request facades. */
-export abstract class CookieRequest {
-  abstract readonly headers: Record<string, string>;
-  protected abstract readonly cookieSigner: CookieSigner | undefined;
-  private parsedCookies?: Record<string, string>;
-  private parsedSignedCookies?: Record<string, string>;
-
-  get cookies(): Record<string, string> {
-    return (this.parsedCookies ??= parseCookieHeader(this.headers.cookie));
-  }
-  get signedCookies(): Record<string, string> {
-    if (this.parsedSignedCookies) return this.parsedSignedCookies;
-    const signer = this.cookieSigner;
-    if (!signer) {
-      throw new Error(
-        "Cannot read signed cookies: no cookie secret is configured. " +
-          'Pass "cookies: { secret }" to NestFactory.create().',
-      );
-    }
-    const signed = new NullObject<string>();
-    const cookies = this.cookies;
-    for (const name in cookies) {
-      const value = signer.unsign(cookies[name]!);
-      if (value !== undefined) signed[name] = value;
-    }
-    return (this.parsedSignedCookies = signed);
-  }
+  cookies?: Record<string, any>;
+  /** Set by `cookie-parser`; see `cookies`. */
+  signedCookies?: Record<string, any>;
+  /** The first secret given to `cookie-parser`, when it is installed. */
+  secret?: string;
 }
 
 // Prototype-free like new NullObject(), but stays a fast-mode V8 object:
@@ -184,51 +155,28 @@ function headersObject(headers: Headers): Record<string, string> {
   return native.toJSON ? native.toJSON() : Object.fromEntries(headers);
 }
 
-/** Request facade over a fetch `Request`; URL parts are sliced without a reparse. */
-class FetchRequest extends CookieRequest implements NativeRequest {
-  readonly method: string;
-  readonly url: string;
-  readonly originalUrl: string;
-  readonly path: string;
-  readonly hostname: string;
-  readonly protocol: string;
-  readonly headers: Record<string, string>;
-  params = new NullObject<string | string[]>();
-  query: Record<string, string | string[]>;
-  body?: unknown;
-  rawBody?: Buffer;
-
-  constructor(
-    readonly raw: Request,
-    readonly ip: string | undefined,
-    protected readonly cookieSigner: CookieSigner | undefined,
-  ) {
-    super();
-    // `Request.url` is already an absolute, normalized URL; slicing avoids a reparse.
-    const full = raw.url;
-    const hostStart = full.indexOf("://") + 3;
-    const pathStart = full.indexOf("/", hostStart);
-    const url = pathStart === -1 ? "/" : full.slice(pathStart);
-    const queryStart = url.indexOf("?");
-    this.method = raw.method;
-    this.url = url;
-    this.originalUrl = url;
-    this.path = queryStart === -1 ? url : url.slice(0, queryStart);
-    this.hostname = full
+export function createRequest(raw: Request, ip?: string): NativeRequest {
+  // `Request.url` is already an absolute, normalized URL; slicing avoids a reparse.
+  const full = raw.url;
+  const hostStart = full.indexOf("://") + 3;
+  const pathStart = full.indexOf("/", hostStart);
+  const url = pathStart === -1 ? "/" : full.slice(pathStart);
+  const queryStart = url.indexOf("?");
+  return {
+    raw,
+    ip,
+    method: raw.method,
+    url,
+    originalUrl: url,
+    path: queryStart === -1 ? url : url.slice(0, queryStart),
+    hostname: full
       .slice(hostStart, pathStart === -1 ? undefined : pathStart)
-      .replace(/^.*@|:\d*$/g, "");
-    this.protocol = full.slice(0, hostStart - 3);
-    this.headers = headersObject(raw.headers);
-    this.query = queryStart === -1 ? new NullObject() : parseQuery(url.slice(queryStart + 1));
-  }
-}
-
-export function createRequest(
-  raw: Request,
-  ip?: string,
-  cookieSigner?: CookieSigner,
-): NativeRequest {
-  return new FetchRequest(raw, ip, cookieSigner);
+      .replace(/^.*@|:\d*$/g, ""),
+    protocol: full.slice(0, hostStart - 3),
+    headers: headersObject(raw.headers),
+    params: new NullObject(),
+    query: queryStart === -1 ? new NullObject() : parseQuery(url.slice(queryStart + 1)),
+  };
 }
 
 export type BodyReader = (request: NativeRequest, limit: number) => Promise<Buffer> | Buffer | null;

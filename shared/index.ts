@@ -38,9 +38,9 @@ export {
   FilesInterceptor,
   type UploadedFileData,
 } from "./uploads.js";
-export { CookieRequest, NullObject, parseQuery } from "./request.js";
+export { NullObject, parseQuery } from "./request.js";
 export type { NativeRequest } from "./request.js";
-export type { ResponseBody, ResponseCookieOptions } from "./response.js";
+export type { CookieWriter, ResponseBody, ResponseCookieOptions } from "./response.js";
 export interface NativeAdapterOptions {
   bodyLimit?: number;
   /** Limit for multipart bodies (file uploads); defaults to `bodyLimit`. */
@@ -137,8 +137,8 @@ export abstract class NativeHttpAdapter<TServer> extends AbstractHttpAdapter<
     return this;
   }
   readonly fetch = (raw: Request, info?: { ip?: string }): Promise<Response> => {
-    const request = createRequest(raw, info?.ip, this.cookieSigner);
-    const response = new NativeResponse(request.method, this.cookieSigner);
+    const request = createRequest(raw, info?.ip);
+    const response = new NativeResponse(request.method, this, request);
     this.dispatch(request, response);
     return response.done;
   };
@@ -311,83 +311,28 @@ export abstract class NativeHttpAdapter<TServer> extends AbstractHttpAdapter<
     return converted.length > 1 ? converted.replace(/\/$/, "") : converted;
   }
   /**
-   * Mirrors `expressjs/cors` (what Nest's Express adapter installs): the same
-   * options, header values, `Vary` handling and preflight behavior. Accepts a
-   * `CorsOptionsDelegate` function as well as a static options object.
+   * Mirrors the `cors` package that Nest's Express adapter installs: options
+   * are merged over its defaults the same way (an explicit `undefined` origin
+   * disables CORS), header values, `Vary` handling and preflight behavior
+   * match, and a `CorsOptionsDelegate` may call back with no options. Static
+   * options are compiled once, so requests take a synchronous path unless a
+   * delegate or an origin callback is involved.
    */
-  enableCors(options: CorsOptions | CorsOptionsDelegate<NativeRequest> = {}): void {
-    const resolveOptions =
-      typeof options === "function"
-        ? (req: NativeRequest) =>
-            new Promise<CorsOptions>((resolveWith, reject) => {
-              options(req, (error, resolved) => (error ? reject(error) : resolveWith(resolved)));
-            })
-        : () => Promise.resolve(options);
-    const listValue = (value: string | string[] | undefined): string | undefined =>
-      Array.isArray(value) ? value.join(",") : value;
-    const matches = (entry: StaticOrigin, origin: string | undefined): boolean =>
-      Array.isArray(entry)
-        ? entry.some((candidate) => matches(candidate, origin))
-        : typeof entry === "string"
-          ? origin === entry
-          : entry instanceof RegExp
-            ? origin !== undefined && entry.test(origin)
-            : Boolean(entry);
-    const originOf = (req: NativeRequest, option: StaticOrigin | CustomOrigin) =>
-      typeof option === "function"
-        ? new Promise<StaticOrigin | undefined>((resolveWith, reject) => {
-            option(req.headers.origin, (error, allowed) =>
-              error ? reject(error) : resolveWith(allowed),
-            );
-          })
-        : Promise.resolve(option);
-
-    this.use((req, res, next) => {
-      resolveOptions(req)
-        .then(async (resolved) => {
-          const origin = await originOf(req, resolved.origin ?? "*");
-          // Like expressjs/cors, a falsy origin disables CORS for this request.
-          if (!origin) return next();
-          const requestOrigin = req.headers.origin;
-          if (origin === "*") {
-            res.setHeader("access-control-allow-origin", "*");
-          } else if (typeof origin === "string") {
-            res.setHeader("access-control-allow-origin", origin);
-            res.vary("Origin");
-          } else {
-            if (matches(origin, requestOrigin) && requestOrigin !== undefined)
-              res.setHeader("access-control-allow-origin", requestOrigin);
-            res.vary("Origin");
-          }
-          if (resolved.credentials === true)
-            res.setHeader("access-control-allow-credentials", "true");
-          const exposed = listValue(resolved.exposedHeaders);
-          if (exposed) res.setHeader("access-control-expose-headers", exposed);
-          if (req.method !== "OPTIONS") return next();
-
-          res.setHeader(
-            "access-control-allow-methods",
-            listValue(resolved.methods) ?? "GET,HEAD,PUT,PATCH,POST,DELETE",
-          );
-          let allowedHeaders = listValue(resolved.allowedHeaders);
-          if (allowedHeaders === undefined) {
-            allowedHeaders = req.headers["access-control-request-headers"];
-            res.vary("Access-Control-Request-Headers");
-          }
-          if (allowedHeaders) res.setHeader("access-control-allow-headers", allowedHeaders);
-          const maxAge = resolved.maxAge;
-          if (typeof maxAge === "number" || maxAge) {
-            res.setHeader("access-control-max-age", String(maxAge));
-          }
-          if (resolved.preflightContinue) return next();
-          // Safari needs an explicit zero content-length on 204 preflights.
-          res
-            .status(resolved.optionsSuccessStatus ?? 204)
-            .setHeader("content-length", "0")
-            .end();
-        })
-        .catch(next);
-    });
+  enableCors(options: CorsInput | CorsOptionsDelegate<NativeRequest> = {}): void {
+    if (typeof options === "function") {
+      this.use((req, res, next) => {
+        options(req, (error, resolved) => {
+          if (error) return next(error);
+          const compiled = compileCors(resolved as CorsInput | undefined);
+          handleCors(compiled, req, res, next);
+        });
+      });
+      return;
+    }
+    const compiled = compileCors(options);
+    // Like `cors`, a falsy static origin turns CORS off for every request.
+    if (!compiled.origin) return;
+    this.use((req, res, next) => handleCors(compiled, req, res, next));
   }
   useStaticAssets(
     root: string | { root?: string; prefix?: string; index?: string; maxAge?: number },
@@ -549,4 +494,124 @@ export abstract class NativeHttpAdapter<TServer> extends AbstractHttpAdapter<
   protected validateApplicationOptions(options: NestApplicationOptions): void {
     this.return503OnClosing = options.return503OnClosing ?? false;
   }
+}
+
+/** Nest's `CorsOptions` plus the aliases the `cors` package and older releases accepted. */
+type CorsInput = CorsOptions & {
+  /** Alias of `allowedHeaders`, as in the `cors` package. */
+  headers?: string | string[];
+  /** @deprecated Accepted by earlier releases of these adapters; use `credentials`. */
+  allowCredentials?: boolean;
+};
+
+/** The `cors` package defaults, merged under the given options like `Object.assign`. */
+const CORS_DEFAULTS = {
+  origin: "*",
+  methods: "GET,HEAD,PUT,PATCH,POST,DELETE",
+  preflightContinue: false,
+  optionsSuccessStatus: 204,
+} satisfies CorsInput;
+
+/** Header values derived once from an options object. */
+interface CompiledCors {
+  origin: CorsOptions["origin"];
+  credentials: boolean;
+  methods?: string;
+  /** `undefined` reflects `Access-Control-Request-Headers`, as `cors` does. */
+  allowedHeaders?: string;
+  exposedHeaders?: string;
+  maxAge?: string;
+  preflightContinue: boolean;
+  optionsSuccessStatus: number;
+}
+
+/** `cors` joins arrays with "," and treats empty values as absent. */
+function corsList(value: unknown): string | undefined {
+  const text = Array.isArray(value) ? value.join(",") : value;
+  return typeof text === "string" && text ? text : undefined;
+}
+
+function compileCors(options: CorsInput | undefined): CompiledCors {
+  const merged: CorsInput = { ...CORS_DEFAULTS, ...options };
+  const allowedHeaders = merged.allowedHeaders || merged.headers;
+  const maxAge = merged.maxAge;
+  return {
+    origin: merged.origin,
+    credentials: merged.credentials === true || merged.allowCredentials === true,
+    methods: corsList(merged.methods),
+    allowedHeaders: allowedHeaders ? (corsList(allowedHeaders) ?? "") : undefined,
+    exposedHeaders: corsList(merged.exposedHeaders),
+    maxAge: typeof maxAge === "number" || maxAge ? String(maxAge) : undefined,
+    preflightContinue: Boolean(merged.preflightContinue),
+    optionsSuccessStatus: merged.optionsSuccessStatus ?? 204,
+  };
+}
+
+/** `cors`'s `isOriginAllowed`: arrays recurse, strings compare, RegExps test. */
+function isOriginAllowed(origin: string | undefined, allowed: StaticOrigin): boolean {
+  if (Array.isArray(allowed)) return allowed.some((entry) => isOriginAllowed(origin, entry));
+  if (typeof allowed === "string") return origin === allowed;
+  if (allowed instanceof RegExp) return allowed.test(origin as string);
+  return Boolean(allowed);
+}
+
+/** Resolves an origin callback, if any, then applies the headers. */
+function handleCors(cors: CompiledCors, req: NativeRequest, res: NativeResponse, next: Next): void {
+  const origin = cors.origin;
+  if (typeof origin !== "function") {
+    if (origin) applyCors(cors, origin, req, res, next);
+    else next();
+    return;
+  }
+  // As in `cors`, the callback also runs for requests without an Origin header.
+  origin(req.headers.origin, (error, allowed) => {
+    if (error || !allowed) next(error);
+    else applyCors(cors, allowed, req, res, next);
+  });
+}
+
+function applyCors(
+  cors: CompiledCors,
+  origin: StaticOrigin,
+  req: NativeRequest,
+  res: NativeResponse,
+  next: Next,
+): void {
+  try {
+    const requestOrigin = req.headers.origin;
+    if (origin === "*") {
+      res.setHeader("access-control-allow-origin", "*");
+    } else if (typeof origin === "string") {
+      res.setHeader("access-control-allow-origin", origin);
+      res.vary("Origin");
+    } else {
+      if (requestOrigin && isOriginAllowed(requestOrigin, origin)) {
+        res.setHeader("access-control-allow-origin", requestOrigin);
+      }
+      res.vary("Origin");
+    }
+    if (cors.credentials) res.setHeader("access-control-allow-credentials", "true");
+    if (req.method === "OPTIONS") {
+      if (cors.methods) res.setHeader("access-control-allow-methods", cors.methods);
+      let allowedHeaders = cors.allowedHeaders;
+      if (allowedHeaders === undefined) {
+        allowedHeaders = req.headers["access-control-request-headers"];
+        res.vary("Access-Control-Request-Headers");
+      }
+      if (allowedHeaders) res.setHeader("access-control-allow-headers", allowedHeaders);
+      if (cors.maxAge) res.setHeader("access-control-max-age", cors.maxAge);
+    }
+    if (cors.exposedHeaders) res.setHeader("access-control-expose-headers", cors.exposedHeaders);
+    if (req.method === "OPTIONS" && !cors.preflightContinue) {
+      // `cors` sends Content-Length: 0 so browsers do not wait for a body; it
+      // matters for a non-204 optionsSuccessStatus, since every 204 response
+      // drops Content-Length as RFC 9110 requires.
+      res.status(cors.optionsSuccessStatus).setHeader("content-length", "0").end();
+      return;
+    }
+  } catch (error) {
+    next(error);
+    return;
+  }
+  next();
 }

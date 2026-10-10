@@ -2,9 +2,9 @@ import { Readable } from "node:stream";
 import { PassThrough } from "node:stream";
 import { STATUS_CODES } from "node:http";
 import { StreamableFile, type CookieSerializeOptions } from "@nestjs/common";
-import type { CookieSigner } from "@nestjs/core/helpers/cookies/cookie-signer.js";
-import { serializeCookie } from "@nestjs/core/helpers/cookies/serialize-cookie.js";
-import { NullObject } from "./request.js";
+import { AbstractHttpAdapter } from "@nestjs/core";
+import { CookieSigner } from "@nestjs/core/helpers/cookies/cookie-signer.js";
+import { NullObject, type NativeRequest } from "./request.js";
 
 class NativeSseResponse extends PassThrough {
   statusCode = 200;
@@ -26,10 +26,49 @@ class NativeSseResponse extends PassThrough {
 
 type OutgoingHeaders = Record<string, number | string | readonly string[]>;
 export type ResponseBody = string | Uint8Array | Readable | null;
-/** Express `res.cookie()` options: `maxAge` is in milliseconds here. */
-export type ResponseCookieOptions = Omit<CookieSerializeOptions, "maxAge"> & {
-  /** Lifetime in **milliseconds**, as in Express; also sets `expires`. */
-  maxAge?: number;
+/** Express `res.cookie()` options: `maxAge` is in **milliseconds** here. */
+export interface ResponseCookieOptions extends Omit<
+  CookieSerializeOptions,
+  "maxAge" | "expires" | "domain" | "priority" | "sameSite" | "path"
+> {
+  /** Lifetime in milliseconds, as in Express; also sets `Expires`. `null` is ignored. */
+  maxAge?: number | string | null;
+  expires?: Date | null;
+  domain?: string | null;
+  path?: string | null;
+  priority?: CookieSerializeOptions["priority"] | null;
+  /** `true` means `strict`, as in Express; `false` omits the attribute. */
+  sameSite?: CookieSerializeOptions["sameSite"] | boolean | null;
+  /** Express's custom value encoder is not supported and throws. */
+  encode?: never;
+}
+
+/** Writes `Set-Cookie` headers; the adapter (Nest's `setCookie()`) in practice. */
+export interface CookieWriter {
+  setCookie(
+    response: NativeResponse,
+    name: string,
+    value: string,
+    options?: CookieSerializeOptions,
+  ): unknown;
+}
+
+/**
+ * For responses created outside an adapter: Nest's own `setCookie()` with no
+ * signer, so serialization rules and error messages are exactly Nest's.
+ */
+const detachedCookieWriter: CookieWriter = {
+  setCookie: (response, name, value, options) =>
+    AbstractHttpAdapter.prototype.setCookie.call(
+      {
+        appendHeader: (target: NativeResponse, header: string, text: string) =>
+          target.appendHeader(header, text),
+      },
+      response,
+      name,
+      value,
+      options,
+    ),
 };
 
 export class NativeResponse {
@@ -43,10 +82,19 @@ export class NativeResponse {
   private pending?: Promise<Response>;
   private complete?: (response: Response) => void;
 
+  // True private fields: the adapter (and its cookie secret) and the request
+  // never show up when a response is logged, inspected or serialized.
+  readonly #cookies: CookieWriter;
+  readonly #request: NativeRequest | undefined;
+
   constructor(
     protected readonly method: string,
-    private readonly cookieSigner?: CookieSigner,
-  ) {}
+    cookies: CookieWriter = detachedCookieWriter,
+    request?: NativeRequest,
+  ) {
+    this.#cookies = cookies;
+    this.#request = request;
+  }
 
   /** The fetch `Response`; only meaningful for the fetch transport. */
   get done(): Promise<Response> {
@@ -102,53 +150,80 @@ export class NativeResponse {
       previous === undefined ? value : ([] as string[]).concat(previous, value);
     return this;
   }
-  /** Adds a field to `Vary` unless it is already listed (or `Vary: *` is set). */
-  vary(field: string): this {
+  /**
+   * Adds fields to `Vary` like the `vary` package that Express and `cors` use:
+   * case-insensitive de-duplication, and `*` absorbs everything.
+   */
+  vary(field: string | readonly string[]): this {
+    const fields = typeof field === "string" ? parseVary(field) : [...field];
+    for (const entry of fields) {
+      if (!HEADER_NAME.test(entry)) throw new TypeError(`Invalid Vary field name: ${entry}`);
+    }
     const current = this.headerValues.vary;
-    if (current === undefined) {
-      this.headerValues.vary = field;
+    const header = current === undefined ? "" : ([] as string[]).concat(current).join(", ");
+    if (header === "*") return this;
+    const present = parseVary(header.toLowerCase());
+    if (fields.includes("*") || present.includes("*")) {
+      this.headerValues.vary = "*";
       return this;
     }
-    const fields = ([] as string[])
-      .concat(current)
-      .flatMap((value) => value.split(","))
-      .map((value) => value.trim().toLowerCase());
-    if (fields.includes("*") || fields.includes(field.toLowerCase())) return this;
-    this.headerValues.vary = `${([] as string[]).concat(current).join(", ")}, ${field}`;
+    let value = header;
+    for (const entry of fields) {
+      const lower = entry.toLowerCase();
+      if (present.includes(lower)) continue;
+      present.push(lower);
+      value = value ? `${value}, ${entry}` : entry;
+    }
+    if (value) this.headerValues.vary = value;
     return this;
   }
   /**
-   * Express-style `res.cookie()`: objects are serialized as `j:` JSON,
-   * `maxAge` is in milliseconds and `signed` uses the `cookies.secret`
-   * application option. Nest's `setCookie()` takes `maxAge` in seconds.
+   * Express's `res.cookie()`: objects become `j:` JSON, other values are
+   * stringified, `maxAge` is in milliseconds (and also sets `Expires`), and
+   * `null`/`false` attributes are left out. `signed: true` uses the secret
+   * `cookie-parser` put on the request, as Express does, and otherwise the
+   * `cookies.secret` application option. Serialization goes through Nest's
+   * `setCookie()`, which rejects invalid names, values and attributes.
    */
-  cookie(name: string, value: string | object, options: ResponseCookieOptions = {}): this {
-    const { signed, maxAge, ...rest } = options;
+  cookie(
+    name: string,
+    value: string | number | boolean | bigint | object | null | undefined,
+    options: ResponseCookieOptions = {},
+  ): this {
+    const { maxAge, expires, domain, path, priority, sameSite, encode, ...rest } = options;
+    if (encode !== undefined) {
+      throw new TypeError(`Cookie "${name}": the "encode" option is not supported.`);
+    }
     const attributes: CookieSerializeOptions = rest;
-    let serialized = typeof value === "object" ? `j:${JSON.stringify(value)}` : value;
-    if (signed) {
-      if (!this.cookieSigner) {
-        throw new Error(
-          `Cannot sign cookie "${name}": no cookie secret is configured. ` +
-            'Pass "cookies: { secret }" to NestFactory.create().',
-        );
+    if (path != null) attributes.path = path;
+    if (domain) attributes.domain = domain;
+    if (expires) attributes.expires = expires;
+    if (priority) attributes.priority = priority;
+    if (sameSite) attributes.sameSite = sameSite === true ? "strict" : sameSite;
+    if (maxAge != null) {
+      const milliseconds = Number(maxAge);
+      // Like Express, a non-numeric maxAge is passed on and rejected by the serializer.
+      if (Number.isNaN(milliseconds)) attributes.maxAge = milliseconds;
+      else {
+        attributes.expires = new Date(Date.now() + milliseconds);
+        attributes.maxAge = Math.floor(milliseconds / 1000);
       }
-      serialized = this.cookieSigner.sign(serialized);
     }
-    if (maxAge !== undefined) {
-      if (!Number.isFinite(maxAge)) throw new TypeError(`Invalid maxAge for cookie "${name}"`);
-      attributes.expires = new Date(Date.now() + maxAge);
-      attributes.maxAge = Math.floor(maxAge / 1000);
+    let text = typeof value === "object" ? `j:${JSON.stringify(value)}` : String(value);
+    const parserSecret = this.#request?.secret;
+    if (attributes.signed && typeof parserSecret === "string" && parserSecret) {
+      text = new CookieSigner(parserSecret).sign(text);
+      attributes.signed = false;
     }
-    return this.appendHeader("set-cookie", serializeCookie(name, serialized, attributes));
+    this.#cookies.setCookie(this, name, text, attributes);
+    return this;
   }
-  /** Express-style `res.clearCookie()`; `path` and `domain` must match the original. */
+  /**
+   * Express's `res.clearCookie()`: sends the cookie with an empty value and an
+   * expired date. `path` and `domain` must match the ones it was set with.
+   */
   clearCookie(name: string, options: ResponseCookieOptions = {}): this {
-    const { signed: _signed, maxAge: _maxAge, ...attributes } = options;
-    return this.appendHeader(
-      "set-cookie",
-      serializeCookie(name, "", { ...attributes, expires: new Date(0) }),
-    );
+    return this.cookie(name, "", { ...options, maxAge: undefined, expires: new Date(1) });
   }
   json(value: unknown): this {
     const text = JSON.stringify(value);
@@ -251,4 +326,17 @@ export class NativeResponse {
     this.streaming = streamed;
     return this;
   }
+}
+
+/** RFC 9110 field-name token, as checked by the `vary` package. */
+const HEADER_NAME = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
+
+/** Comma-separated header fields, trimmed, without empty entries. */
+function parseVary(header: string): string[] {
+  const fields: string[] = [];
+  for (const part of header.split(",")) {
+    const field = part.trim();
+    if (field) fields.push(field);
+  }
+  return fields;
 }

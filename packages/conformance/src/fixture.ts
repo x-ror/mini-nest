@@ -156,6 +156,34 @@ class TestController {
     });
     response.json({ signed: true });
   }
+  /** Express's lenient `res.cookie()` inputs: primitives, `null` attributes, `sameSite: true`. */
+  @Get("cookies/express-edge") expressEdgeCookies(@Res() response: NativeResponse) {
+    response
+      .cookie("visits", 5)
+      .cookie("remember", true)
+      .cookie("nothing", null)
+      .cookie("sid", "x", { maxAge: null, domain: null, priority: null, sameSite: false })
+      .cookie("strict", "y", { sameSite: true, priority: "high" })
+      .cookie("ttl", "z", { maxAge: 90_000, path: "/api" })
+      .clearCookie("gone")
+      .json({ edge: true });
+  }
+  /** Express signs with `cookie-parser`'s secret; only compared when it is installed. */
+  @Get("cookies/express-signed") expressSignedCookies(@Res() response: NativeResponse) {
+    response
+      .cookie("token", "user-42", { signed: true, httpOnly: true, expires: COOKIE_EXPIRES })
+      .cookie("prefs", { theme: "dark" }, { signed: true })
+      .clearCookie("stale", { signed: true, path: "/api" })
+      .json({ signed: true });
+  }
+  /** What `cookie-parser` (when installed) leaves on the request. */
+  @Get("cookies/parser") parserCookies(@Req() req: NativeRequest) {
+    return {
+      cookies: req.cookies ?? null,
+      signedCookies: req.signedCookies ?? null,
+      secret: typeof req.secret,
+    };
+  }
   @Get("cookies/read") readCookies(
     @Cookies() cookies: Record<string, string>,
     @Cookies("theme") theme: string | undefined,

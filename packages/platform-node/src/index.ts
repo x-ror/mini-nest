@@ -3,13 +3,12 @@ import { createServer as createSecureServer } from "node:https";
 import { PassThrough, Readable, pipeline } from "node:stream";
 import type { TLSSocket } from "node:tls";
 import { PayloadTooLargeException, type NestApplicationOptions } from "@nestjs/common";
-import type { CookieSigner } from "@nestjs/core/helpers/cookies/cookie-signer.js";
 import {
-  CookieRequest,
   NativeHttpAdapter,
   NativeResponse,
   NullObject,
   parseQuery,
+  type CookieWriter,
   type NativeRequest,
   type ResponseBody,
 } from "@shared";
@@ -33,7 +32,7 @@ export type {
 const EMPTY_BODY = Buffer.alloc(0);
 
 /** Request facade read straight from `IncomingMessage`; costly fields are lazy. */
-class NodeRequest extends CookieRequest implements NativeRequest {
+class NodeRequest implements NativeRequest {
   readonly method: string;
   url: string;
   originalUrl: string;
@@ -48,9 +47,7 @@ class NodeRequest extends CookieRequest implements NativeRequest {
   constructor(
     readonly incoming: IncomingMessage,
     private readonly outgoing: ServerResponse,
-    protected readonly cookieSigner: CookieSigner | undefined,
   ) {
-    super();
     this.method = incoming.method ?? "GET";
     let url = incoming.url ?? "/";
     if (url.charCodeAt(0) !== 47) {
@@ -129,9 +126,10 @@ class NodeResponse extends NativeResponse {
   constructor(
     method: string,
     private readonly outgoing: ServerResponse,
-    cookieSigner: CookieSigner | undefined,
+    cookies: CookieWriter,
+    request: NativeRequest,
   ) {
-    super(method, cookieSigner);
+    super(method, cookies, request);
   }
   override on(event: string, listener: (...args: any[]) => void): this {
     this.outgoing.on(event, listener);
@@ -168,9 +166,8 @@ export class NodeHttpAdapter extends NativeHttpAdapter<Server> {
     this.validateApplicationOptions(options);
     this.forceCloseConnections = options.forceCloseConnections ?? false;
     const listener = (incoming: IncomingMessage, outgoing: ServerResponse): void => {
-      const signer = this.cookieSigner;
-      const request = new NodeRequest(incoming, outgoing, signer);
-      this.dispatch(request, new NodeResponse(request.method, outgoing, signer));
+      const request = new NodeRequest(incoming, outgoing);
+      this.dispatch(request, new NodeResponse(request.method, outgoing, this, request));
     };
     this.httpServer = options.httpsOptions
       ? createSecureServer(options.httpsOptions, listener)

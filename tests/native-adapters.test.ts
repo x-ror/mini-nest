@@ -3,8 +3,11 @@ import { execFileSync } from "node:child_process";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { get as httpsGet } from "node:https";
 import { join } from "node:path";
+import { inspect } from "node:util";
+import cookieParser from "cookie-parser";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 import { NestFactory } from "@nestjs/core";
+import { CookieSigner } from "@nestjs/core/helpers/cookies/cookie-signer.js";
 import {
   Body,
   Controller,
@@ -132,7 +135,10 @@ afterEach(async () => {
 
 describe("native Nest adapters", () => {
   it("matches real Nest on Express for supported behavior", async () => {
-    await compareAdapters(new NodeHttpAdapter(), new ExpressAdapter());
+    await compareAdapters(
+      () => new NodeHttpAdapter(),
+      () => new ExpressAdapter(),
+    );
   });
   it("supports initialization without listen and repeated close", async () => {
     const adapter = new NodeHttpAdapter();
@@ -359,162 +365,236 @@ describe("native Nest adapters", () => {
     });
     expect(denied.headers.get("access-control-allow-origin")).toBeNull();
   });
-  it("matches expressjs/cors for reflected origins, delegates and preflight options", async () => {
-    const reflecting = new NodeHttpAdapter();
-    reflecting.enableCors({ origin: true, credentials: true, methods: "GET,POST", maxAge: 600 });
-    const reflectingApp = await NestFactory.create(FixtureModule, reflecting, { logger: false });
-    apps.push(reflectingApp);
-    await reflectingApp.listen(0, "127.0.0.1");
-    const reflectingBase = await reflectingApp.getUrl();
-    const reflected = await fetch(`${reflectingBase}/api`, {
-      headers: { origin: "https://any.example" },
-    });
-    expect(reflected.headers.get("access-control-allow-origin")).toBe("https://any.example");
-    expect(reflected.headers.get("vary")).toBe("Origin");
-    const preflight = await fetch(`${reflectingBase}/api`, {
-      method: "OPTIONS",
-      headers: {
-        origin: "https://any.example",
-        "access-control-request-method": "POST",
-        "access-control-request-headers": "x-custom",
-      },
-    });
-    expect(preflight.status).toBe(204);
-    expect(preflight.headers.get("access-control-allow-methods")).toBe("GET,POST");
-    expect(preflight.headers.get("access-control-allow-headers")).toBe("x-custom");
-    expect(preflight.headers.get("access-control-max-age")).toBe("600");
-    expect(preflight.headers.get("vary")).toBe("Origin, Access-Control-Request-Headers");
-    expect(await preflight.text()).toBe("");
-    const fixedOrigin = new NodeHttpAdapter();
-    fixedOrigin.enableCors({
-      origin: "https://fixed.example",
-      exposedHeaders: "x-total, x-page",
-      allowedHeaders: ["x-a", "x-b"],
-      optionsSuccessStatus: 200,
-    });
-    const fixedApp = await NestFactory.create(FixtureModule, fixedOrigin, { logger: false });
-    apps.push(fixedApp);
-    await fixedApp.listen(0, "127.0.0.1");
-    const fixedBase = await fixedApp.getUrl();
-    const fixed = await fetch(`${fixedBase}/api`, { headers: { origin: "https://other.example" } });
-    expect(fixed.headers.get("access-control-allow-origin")).toBe("https://fixed.example");
-    expect(fixed.headers.get("access-control-expose-headers")).toBe("x-total, x-page");
-    expect(fixed.headers.get("vary")).toBe("Origin");
-    const fixedPreflight = await fetch(`${fixedBase}/api/options`, {
-      method: "OPTIONS",
-      headers: { origin: "https://other.example", "access-control-request-method": "GET" },
-    });
-    expect(fixedPreflight.status).toBe(200);
-    expect(fixedPreflight.headers.get("access-control-allow-headers")).toBe("x-a,x-b");
-    expect(fixedPreflight.headers.get("vary")).toBe("Origin");
-    expect(fixedPreflight.headers.get("content-length")).toBe("0");
-    expect(await fixedPreflight.text()).toBe("");
-
+  it("follows the cors package for delegates, preflightContinue, origin callbacks and aliases", async () => {
     const delegated = new NodeHttpAdapter();
     delegated.enableCors((req: NativeRequest, cb) => {
-      if (req.headers.origin === "https://boom.example") return cb(new Error("boom"), {});
-      cb(null, req.path === "/api/options" ? { origin: false } : { preflightContinue: true });
+      const mode = req.headers["x-cors"];
+      if (mode === "error") return cb(new Error("delegate failed"), {});
+      if (mode === "defaults") return (cb as (error: null) => void)(null);
+      if (mode === "off") return cb(null, { origin: false });
+      cb(null, { origin: true, preflightContinue: true });
     });
     const delegatedApp = await NestFactory.create(FixtureModule, delegated, { logger: false });
     apps.push(delegatedApp);
     await delegatedApp.listen(0, "127.0.0.1");
     const delegatedBase = await delegatedApp.getUrl();
+    const preflight = { origin: "https://x.example", "access-control-request-method": "GET" };
+
+    // preflightContinue: the preflight gets CORS headers and still reaches @Options().
     const continued = await fetch(`${delegatedBase}/api/options`, {
       method: "OPTIONS",
-      headers: { origin: "https://x.example", "access-control-request-method": "GET" },
+      headers: preflight,
     });
     expect(continued.status).toBe(200);
-    expect(continued.headers.get("access-control-allow-origin")).toBeNull();
+    expect(continued.headers.get("access-control-allow-origin")).toBe("https://x.example");
+    expect(continued.headers.get("access-control-allow-methods")).toBe(
+      "GET,HEAD,PUT,PATCH,POST,DELETE",
+    );
     expect(await continued.json()).toEqual({ options: true });
-    const disabled = await fetch(`${delegatedBase}/api`, {
-      headers: { origin: "https://x.example" },
+    // origin: false turns CORS off for the request, so OPTIONS is routed normally.
+    const disabled = await fetch(`${delegatedBase}/api/options`, {
+      method: "OPTIONS",
+      headers: { ...preflight, "x-cors": "off" },
     });
-    expect(disabled.headers.get("access-control-allow-origin")).toBe("*");
-    const failed = await fetch(`${delegatedBase}/api`, {
-      headers: { origin: "https://boom.example" },
+    expect(disabled.status).toBe(200);
+    expect(disabled.headers.get("access-control-allow-origin")).toBeNull();
+    expect(disabled.headers.get("access-control-allow-methods")).toBeNull();
+    expect(await disabled.json()).toEqual({ options: true });
+    // A delegate that calls back without options gets the cors defaults.
+    const defaults = await fetch(`${delegatedBase}/api`, {
+      headers: { origin: "https://x.example", "x-cors": "defaults" },
     });
+    expect(defaults.status).toBe(200);
+    expect(defaults.headers.get("access-control-allow-origin")).toBe("*");
+    const failed = await fetch(`${delegatedBase}/api`, { headers: { "x-cors": "error" } });
     expect(failed.status).toBe(500);
-    const viaFactory = await NestFactory.create(FixtureModule, new NodeHttpAdapter(), {
-      logger: false,
-      cors: { origin: [/\.allowed\.example$/] },
+    await failed.arrayBuffer();
+
+    // Like cors, the origin callback also runs for requests without an Origin header.
+    const seen: (string | undefined)[] = [];
+    const callback = new NodeHttpAdapter();
+    callback.enableCors({
+      origin: (origin, cb) => {
+        seen.push(origin);
+        cb(null, origin === "https://cb.example");
+      },
     });
-    apps.push(viaFactory);
-    await viaFactory.listen(0, "127.0.0.1");
-    const factoryBase = await viaFactory.getUrl();
-    const allowed = await fetch(`${factoryBase}/api`, {
-      headers: { origin: "https://a.allowed.example" },
-    });
-    expect(allowed.headers.get("access-control-allow-origin")).toBe("https://a.allowed.example");
-    const noOrigin = await fetch(`${factoryBase}/api`);
-    expect(noOrigin.headers.get("access-control-allow-origin")).toBeNull();
-    expect(noOrigin.headers.get("vary")).toBe("Origin");
+    const callbackApp = await NestFactory.create(FixtureModule, callback, { logger: false });
+    apps.push(callbackApp);
+    await callbackApp.listen(0, "127.0.0.1");
+    const sameOrigin = await fetch(`${await callbackApp.getUrl()}/api`);
+    expect(sameOrigin.status).toBe(200);
+    expect(sameOrigin.headers.get("access-control-allow-origin")).toBeNull();
+    expect(seen).toEqual([undefined]);
+
+    // An unset origin (e.g. a missing environment variable) fails closed, as in cors.
+    const unset = new NodeHttpAdapter();
+    unset.enableCors({ origin: process.env.NEST_NATIVE_UNSET_CORS_ORIGIN, credentials: true });
+    const aliases = new NodeHttpAdapter();
+    aliases.enableCors({ origin: ["https://a.example"], allowCredentials: true, headers: "x-a" });
+    for (const adapter of [unset, aliases]) {
+      const app = await NestFactory.create(FixtureModule, adapter, { logger: false });
+      apps.push(app);
+      await app.init();
+    }
+    const evil = await unset.fetch(
+      new Request("http://localhost/api", { headers: { origin: "https://evil.example" } }),
+    );
+    expect(evil.headers.get("access-control-allow-origin")).toBeNull();
+    expect(evil.headers.get("access-control-allow-credentials")).toBeNull();
+    expect(evil.headers.get("vary")).toBeNull();
+    const aliased = await aliases.fetch(
+      new Request("http://localhost/api/options", {
+        method: "OPTIONS",
+        headers: { origin: "https://a.example", "access-control-request-headers": "x-b" },
+      }),
+    );
+    expect(aliased.status).toBe(204);
+    expect(aliased.headers.get("access-control-allow-credentials")).toBe("true");
+    expect(aliased.headers.get("access-control-allow-headers")).toBe("x-a");
+    expect(aliased.headers.get("vary")).toBe("Origin");
   });
-  it("parses request cookies and writes Express-style and signed cookies on Node and the fetch path", async () => {
+  it("appends Vary fields like the vary package", () => {
+    const response = new NativeResponse("GET");
+    response.setHeader("vary", "");
+    response.vary("Origin");
+    expect(response.getHeader("vary")).toBe("Origin");
+    response.vary(["origin", "Accept-Encoding"]).vary("Access-Control-Request-Headers");
+    expect(response.getHeader("vary")).toBe(
+      "Origin, Accept-Encoding, Access-Control-Request-Headers",
+    );
+    response.vary("*").vary("Origin");
+    expect(response.getHeader("vary")).toBe("*");
+    expect(() => response.vary("bad field")).toThrow("Invalid Vary field name");
+  });
+  it("writes cookies with Express's res.cookie() and res.clearCookie() semantics", async () => {
+    const before = Date.now();
+    const response = new NativeResponse("GET")
+      .cookie("visits", 5)
+      .cookie("remember", true)
+      .cookie("nothing", null)
+      .cookie("sid", "x", { maxAge: null, domain: null, priority: null, sameSite: false })
+      .cookie("strict", "y", { sameSite: true })
+      .cookie("ttl", "z", { maxAge: 90_000, httpOnly: true })
+      .clearCookie("gone", { maxAge: 5000, path: "/api" });
+    const [visits, remember, nothing, sid, strict, ttl, gone] = response.getHeader(
+      "set-cookie",
+    ) as string[];
+    expect([visits, remember, nothing, sid, strict, gone]).toEqual([
+      "visits=5; Path=/",
+      "remember=true; Path=/",
+      "nothing=j%3Anull; Path=/",
+      "sid=x; Path=/",
+      "strict=y; Path=/; SameSite=Strict",
+      "gone=; Path=/api; Expires=Thu, 01 Jan 1970 00:00:00 GMT",
+    ]);
+    expect(ttl).toMatch(/^ttl=z; Path=\/; Max-Age=90; Expires=[^;]+; HttpOnly$/);
+    const expires = Date.parse(/Expires=([^;]+)/.exec(ttl!)![1]!);
+    expect(expires).toBeGreaterThanOrEqual(before + 89_000);
+    expect(expires).toBeLessThanOrEqual(Date.now() + 90_000);
+    // Express passes a non-numeric maxAge on, and its serializer rejects it too.
+    expect(() => response.cookie("nan", "x", { maxAge: Number.NaN })).toThrow(TypeError);
+    expect(() => response.cookie("bad;name", "x")).toThrow("Invalid cookie name");
+    expect(() => response.cookie("signed", "x", { signed: true })).toThrow("no cookie secret");
+    expect(() => response.cookie("custom", "x", { encode: String } as never)).toThrow("encode");
+
+    // signed: true uses the cookies.secret application option when cookie-parser is absent.
     const adapter = new NodeHttpAdapter();
     const app = await NestFactory.create(FixtureModule, adapter, {
       logger: false,
       cookies: { secret: ["current-secret", "previous-secret"] },
     });
     apps.push(app);
-    app.use((req: NativeRequest, res: NativeResponse, next: () => void) => {
-      res.setHeader("x-cookie-theme", req.cookies.theme ?? "none");
-      res.setHeader("x-signed-token", req.signedCookies.token ?? "none");
+    await app.init();
+    const signed = await adapter.fetch(new Request("http://localhost/api/cookies/express-signed"));
+    expect(signed.status).toBe(200);
+    const [token, prefs, stale] = signed.headers.getSetCookie();
+    const unsign = (header: string | undefined) =>
+      new CookieSigner("current-secret").unsign(
+        decodeURIComponent(header!.split(";")[0]!.split("=")[1]!),
+      );
+    expect(unsign(token)).toBe("user-42");
+    expect(unsign(prefs)).toBe('j:{"theme":"dark"}');
+    expect(unsign(stale)).toBe("");
+    expect(stale).toContain("; Path=/api; Expires=Thu, 01 Jan 1970 00:00:00 GMT");
+  });
+  it("keeps request cookies to cookie-parser, as Express does, and never exposes the secret", async () => {
+    const plain = new NodeHttpAdapter();
+    const plainApp = await NestFactory.create(FixtureModule, plain, { logger: false });
+    apps.push(plainApp);
+    await plainApp.init();
+    // Without cookie-parser nothing populates req.cookies, and reading it does not throw.
+    const untouched = await plain.fetch(
+      new Request("http://localhost/api/cookies/parser", { headers: { cookie: "a=1" } }),
+    );
+    expect(await untouched.json()).toEqual({
+      cookies: null,
+      signedCookies: null,
+      secret: "undefined",
+    });
+
+    // cookie-parser runs (it skips requests whose req.cookies is already set) and its
+    // secret serves @SignedCookies() and res.cookie({ signed: true }) without cookies.secret.
+    const adapter = new NodeHttpAdapter();
+    const app = await NestFactory.create(FixtureModule, adapter, { logger: false });
+    apps.push(app);
+    app.use(cookieParser("parser-secret"));
+    app.use((req: NativeRequest, _res: NativeResponse, next: () => void) => {
+      req.cookies = { ...req.cookies, injected: "yes" };
       next();
     });
     await app.listen(0, "127.0.0.1");
     const base = await app.getUrl();
-    const before = Date.now();
-    const response = new NativeResponse("GET");
-    response.cookie("ttl", "x", { maxAge: 90_000, httpOnly: true, sameSite: "lax" });
-    const [ttl] = response.getHeader("set-cookie") as string[];
-    expect(ttl).toContain("ttl=x; Path=/; Max-Age=90; Expires=");
-    expect(ttl).toContain("; HttpOnly; SameSite=Lax");
-    const expires = new Date(/Expires=([^;]+)/.exec(ttl!)![1]!).getTime();
-    expect(expires).toBeGreaterThanOrEqual(before + 90_000 - 1000);
-    expect(() => response.cookie("bad", "x", { signed: true })).toThrow("no cookie secret");
-    expect(() => response.cookie("bad;name", "x")).toThrow("Invalid cookie name");
-
-    const signed = await fetch(`${base}/api/cookies/signed`);
-    await signed.arrayBuffer();
-    const [signedPair] = signed.headers.getSetCookie()[0]!.split(";");
-    expect(signedPair).toMatch(/^token=s%3Auser-42\./);
-    const cookieHeader = `${decodeURIComponent(signedPair!)}; theme=dark`;
-    const read = await fetch(`${base}/api/cookies/read`, { headers: { cookie: cookieHeader } });
-    expect(read.headers.get("x-cookie-theme")).toBe("dark");
-    expect(read.headers.get("x-signed-token")).toBe("user-42");
-    expect(await read.json()).toEqual({
-      cookies: { token: decodeURIComponent(signedPair!.slice("token=".length)), theme: "dark" },
-      theme: "dark",
-      token: "user-42",
+    const signedToken = new CookieSigner("parser-secret").sign("user-42");
+    const cookie = [
+      `token=${encodeURIComponent(signedToken)}`,
+      `prefs=${encodeURIComponent('j:{"theme":"dark"}')}`,
+    ].join("; ");
+    const parsed = await fetch(`${base}/api/cookies/parser`, { headers: { cookie } });
+    expect(await parsed.json()).toEqual({
+      cookies: { prefs: { theme: "dark" }, injected: "yes" },
+      signedCookies: { token: "user-42" },
+      secret: "string",
     });
+    const read = await fetch(`${base}/api/cookies/read`, { headers: { cookie } });
+    expect(read.status).toBe(200);
+    expect((await read.json()).token).toBe("user-42");
     const tampered = await fetch(`${base}/api/cookies/read`, {
       headers: { cookie: "token=s:user-42.forged" },
     });
-    expect(read.status).toBe(200);
-    expect(tampered.headers.get("x-signed-token")).toBe("none");
+    expect(tampered.status).toBe(200);
     expect((await tampered.json()).token).toBeNull();
+    const written = await fetch(`${base}/api/cookies/express-signed`);
+    expect(written.status).toBe(200);
+    const [tokenCookie] = written.headers.getSetCookie();
+    expect(decodeURIComponent(tokenCookie!.split(";")[0]!)).toBe(`token=${signedToken}`);
 
-    const viaFetch = await adapter.fetch(
-      new Request("http://localhost/api/cookies/express", { headers: { cookie: "theme=light" } }),
-    );
-    expect(viaFetch.headers.get("x-cookie-theme")).toBe("light");
-    expect(viaFetch.headers.getSetCookie()).toEqual([
-      "session=abc%20123; Path=/; Expires=Tue, 01 Jan 2030 00:00:00 GMT; HttpOnly; Secure; SameSite=None",
-      "prefs=j%3A%7B%22theme%22%3A%22dark%22%7D; Path=/api",
-      "old=; Path=/api; Expires=Thu, 01 Jan 1970 00:00:00 GMT",
-    ]);
-
-    const unsigned = await NestFactory.create(FixtureModule, new NodeHttpAdapter(), {
+    // Neither the request nor the response carries the cookie secret in a visible field.
+    const dumps: string[] = [];
+    const secretApp = await NestFactory.create(FixtureModule, new NodeHttpAdapter(), {
       logger: false,
+      cookies: { secret: "top-secret-value" },
     });
-    apps.push(unsigned);
-    unsigned.use((req: NativeRequest, res: NativeResponse, next: () => void) => {
-      res.setHeader("x-signed-count", String(Object.keys(req.signedCookies).length));
+    apps.push(secretApp);
+    secretApp.use((req: NativeRequest, res: NativeResponse, next: () => void) => {
+      dumps.push(inspect(req, { depth: 3 }), inspect(res, { depth: 3 }));
+      // Node's facades wrap circular IncomingMessage/ServerResponse objects, so
+      // JSON.stringify only succeeds on the fetch path.
+      if (req.headers["x-fetch-path"] === "1") {
+        dumps.push(JSON.stringify(req), JSON.stringify(res));
+      }
       next();
     });
-    await unsigned.listen(0, "127.0.0.1");
-    const noSecret = await fetch(`${await unsigned.getUrl()}/api`, { headers: { cookie: "a=1" } });
-    expect(noSecret.status).toBe(500);
+    await secretApp.listen(0, "127.0.0.1");
+    await (await fetch(`${await secretApp.getUrl()}/api`)).arrayBuffer();
+    const fetchAdapter = secretApp.getHttpAdapter() as unknown as NodeHttpAdapter;
+    await (
+      await fetchAdapter.fetch(
+        new Request("http://localhost/api", { headers: { "x-fetch-path": "1" } }),
+      )
+    ).arrayBuffer();
+    expect(dumps).toHaveLength(6);
+    for (const dump of dumps) expect(dump).not.toContain("top-secret-value");
   });
   it("preserves multiple cookies and omits bodies for HEAD and 204", async () => {
     const adapter = new NodeHttpAdapter();
