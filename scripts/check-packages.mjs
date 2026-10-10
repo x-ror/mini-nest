@@ -26,7 +26,9 @@ for (const name of ["platform-node", "platform-bun"]) {
   if (release !== undefined) {
     assert.equal(manifest.version, release, `${name}: version does not match the release tag`);
     assert.ok(manifest.license, `${name}: package.json needs "license" before publishing`);
-    await access("LICENSE").catch(() => assert.fail("A LICENSE file is required to publish"));
+    await access(`${directory}/LICENSE`).catch(() =>
+      assert.fail(`${name}: a LICENSE file is required to publish`),
+    );
   }
 }
 assert.equal(versions.size, 1, "Both adapters must share one version");

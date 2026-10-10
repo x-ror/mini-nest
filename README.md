@@ -483,3 +483,8 @@ Both packages share one version, recorded in `CHANGELOG.md`.
    that a license is set, then publishes both packages to npm with
    provenance. It needs an `NPM_TOKEN` secret in a GitHub environment named
    `npm`.
+
+## License
+
+[0BSD](LICENSE): use, copy, modify and distribute for any purpose, with or
+without attribution.

@@ -15,6 +15,7 @@
   "bugs": {
     "url": "https://github.com/x-ror/nest-native-adapters/issues"
   },
+  "license": "0BSD",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/x-ror/nest-native-adapters.git",
