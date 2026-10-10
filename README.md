@@ -13,7 +13,7 @@ decorators, guards, pipes, interceptors, exception filters, and application life
 
 The two adapters include shared router, request parsing, and response code in their builds.
 `shared/` is internal source, not a separate npm package.
-Run `pnpm run build` before packing or publishing either adapter; only `dist/` is shipped. Packages are not published to npm yet. Supported baseline:
+Run `pnpm run build` before packing or publishing either adapter; only `dist/` is shipped. Packages are not published to npm yet; see Releasing below. Supported baseline:
 NestJS **12.1.2**, Node.js 22+, current Bun. Other Nest versions are not yet verified.
 Neither adapter uses Express or Fastify. Express is a test-only reference and
 Fastify a benchmark-only one.
@@ -470,3 +470,16 @@ is retained only in Git history; its phases no longer describe this project's
 roadmap.
 
 Repository: <https://github.com/x-ror/nest-native-adapters>
+
+## Releasing
+
+Both packages share one version, recorded in `CHANGELOG.md`.
+
+1. Set the same `version` in `packages/platform-node/package.json` and
+   `packages/platform-bun/package.json`, and move the changelog's
+   Unreleased entries under that version.
+2. Push a tag `v<version>`. The Release workflow builds, runs the full
+   check, test and Bun suites, checks that the tag matches both packages and
+   that a license is set, then publishes both packages to npm with
+   provenance. It needs an `NPM_TOKEN` secret in a GitHub environment named
+   `npm`.
